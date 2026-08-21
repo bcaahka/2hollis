@@ -8,8 +8,6 @@ import { NowPlaying, isIosNowPlaying } from './nowPlaying';
 const artworkCache = new Map<string, string>();
 const ART_SIZE = 320;
 
-const toPublicPath = (path: string): string => path.replace(/^\//, '');
-
 const bitmapToJpeg = (source: CanvasImageSource, sw: number, sh: number): string => {
   const canvas = document.createElement('canvas');
   canvas.width = ART_SIZE;
@@ -119,51 +117,15 @@ export const resolveArtwork = async (track: Track): Promise<string> => {
   return fallbackArtwork(track.album);
 };
 
-const toBase64Payload = (dataUrl: string): string =>
-  dataUrl.replace(/^data:image\/\w+;base64,/, '');
-
-const absoluteCoverUrl = (cover: string): string => {
-  try {
-    return new URL(cover, window.location.href).href;
-  } catch {
-    return cover;
-  }
-};
-
+/** Android / web only — iOS Now Playing is owned by native AVPlayer. */
 export const syncMediaMetadata = async (
   track: Track | null,
   isCancelled?: () => boolean
 ): Promise<void> => {
+  if (isIosNowPlaying()) return;
+
   if (!track) {
-    if (isIosNowPlaying()) {
-      await NowPlaying.clear().catch(() => undefined);
-    } else {
-      await NativeMediaSession.setPlaybackState({ playbackState: 'none' }).catch(() => undefined);
-    }
-    return;
-  }
-
-  const cover = coverFor(track);
-  if (isCancelled?.()) return;
-
-  if (isIosNowPlaying()) {
-    // Prefer native bundle path — avoids large base64 over the Capacitor bridge.
-    // Only generate canvas/base64 when there is no cover file (e.g. 4x4).
-    let artworkBase64: string | undefined;
-    if (!cover) {
-      const dataUrl = await resolveArtwork(track);
-      if (isCancelled?.()) return;
-      artworkBase64 = toBase64Payload(dataUrl);
-    }
-
-    await NowPlaying.setMetadata({
-      title: track.title,
-      artist: '2hollis',
-      album: track.album,
-      artworkPath: cover ? toPublicPath(cover) : undefined,
-      artworkSrc: cover ? absoluteCoverUrl(cover) : undefined,
-      artworkBase64,
-    }).catch(() => undefined);
+    await NativeMediaSession.setPlaybackState({ playbackState: 'none' }).catch(() => undefined);
     return;
   }
 
@@ -181,26 +143,19 @@ export const syncMediaMetadata = async (
 };
 
 export const syncPlaybackState = async (isPlaying: boolean, hasTrack: boolean): Promise<void> => {
+  if (isIosNowPlaying()) return;
   const playbackState = !hasTrack ? 'none' : isPlaying ? 'playing' : 'paused';
-  if (isIosNowPlaying()) {
-    await NowPlaying.setPlaybackState({ playbackState }).catch(() => undefined);
-    return;
-  }
   await NativeMediaSession.setPlaybackState({ playbackState }).catch(() => undefined);
 };
 
 export const syncPositionState = async (position: number, duration: number): Promise<void> => {
+  if (isIosNowPlaying()) return;
   if (!Number.isFinite(duration) || duration <= 0) return;
-  const payload = {
+  await NativeMediaSession.setPositionState({
     position: Math.max(0, Math.min(position, duration)),
     duration,
     playbackRate: 1,
-  };
-  if (isIosNowPlaying()) {
-    await NowPlaying.setPositionState(payload).catch(() => undefined);
-    return;
-  }
-  await NativeMediaSession.setPositionState(payload).catch(() => undefined);
+  }).catch(() => undefined);
 };
 
 export type MediaActionHandlers = {
@@ -231,6 +186,10 @@ export const registerMediaActionHandlers = async (handlers: MediaActionHandlers)
       iosActionListener = null;
     }
     iosActionListener = await NowPlaying.addListener('action', (data) => {
+      // play/pause/seek are handled natively on AVPlayer; only track changes need JS.
+      if (data.action === 'play' || data.action === 'pause' || data.action === 'seekto') {
+        return;
+      }
       run(data.action, data.seekTime);
     });
     return;

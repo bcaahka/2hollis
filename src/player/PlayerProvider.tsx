@@ -3,19 +3,25 @@ import type { ReactNode } from 'react';
 import { Capacitor } from '@capacitor/core';
 import type { PluginListenerHandle } from '@capacitor/core';
 import { Volume } from '@capawesome/capacitor-volume';
-import { SONGS } from '../data/songs';
+import { SONGS, coverFor } from '../data/songs';
 import type { Track } from '../data/songs';
 import { PlayerContext } from './context';
 import type { PlayerContextValue, RepeatMode } from './context';
 import {
   registerMediaActionHandlers,
+  resolveArtwork,
   syncMediaMetadata,
   syncPlaybackState,
   syncPositionState,
 } from './mediaSession';
+import { NowPlaying, isIosNowPlaying, toPublicPath } from './nowPlaying';
+
+const toBase64Payload = (dataUrl: string): string =>
+  dataUrl.replace(/^data:image\/\w+;base64,/, '');
 
 export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const iosNative = isIosNowPlaying();
   const [current, setCurrent] = useState<Track | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -32,6 +38,10 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   shuffleRef.current = shuffle;
   const repeatRef = useRef(repeat);
   repeatRef.current = repeat;
+  const progressRef = useRef(progress);
+  progressRef.current = progress;
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
 
   const next = useCallback(() => {
     setCurrent((prev) => {
@@ -47,11 +57,22 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     });
   }, []);
 
-  const prev = useCallback(() => {
+  const restartCurrent = useCallback(() => {
+    setProgress(0);
+    if (iosNative) {
+      void NowPlaying.seek({ time: 0 }).then(() => NowPlaying.resume()).catch(() => undefined);
+      setIsPlaying(true);
+      return;
+    }
     const audio = audioRef.current;
-    if (audio && audio.currentTime > 3) {
-      audio.currentTime = 0;
-      setProgress(0);
+    if (!audio) return;
+    audio.currentTime = 0;
+    audio.play().catch(() => undefined);
+  }, [iosNative]);
+
+  const prev = useCallback(() => {
+    if (progressRef.current > 3) {
+      restartCurrent();
       return;
     }
     setCurrent((p) => {
@@ -65,24 +86,40 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       }
       return SONGS[(idx - 1 + SONGS.length) % SONGS.length];
     });
-  }, []);
+  }, [restartCurrent]);
 
   const handleEndedRef = useRef<() => void>(() => undefined);
   handleEndedRef.current = () => {
     if (repeatRef.current === 'one') {
-      audioRef.current?.play().catch(() => undefined);
+      restartCurrent();
       return;
     }
     next();
   };
+
+  const playNativeTrack = useCallback(async (track: Track) => {
+    const cover = coverFor(track);
+    let artworkBase64: string | undefined;
+    if (!cover) {
+      const dataUrl = await resolveArtwork(track);
+      artworkBase64 = toBase64Payload(dataUrl);
+    }
+
+    await NowPlaying.play({
+      url: toPublicPath(track.file),
+      title: track.title,
+      artist: '2hollis',
+      album: track.album,
+      artworkPath: cover ? toPublicPath(cover) : undefined,
+      artworkBase64,
+    });
+  }, []);
 
   const getAudio = useCallback((): HTMLAudioElement => {
     if (!audioRef.current) {
       const audio = new Audio();
       audio.preload = 'metadata';
       audio.setAttribute('playsinline', 'true');
-      // Reduce WKWebView claiming Now Playing without our artwork.
-      (audio as HTMLAudioElement & { disableRemotePlayback?: boolean }).disableRemotePlayback = true;
       audio.volume = Capacitor.isNativePlatform() ? 1 : volumeRef.current;
       audio.addEventListener('timeupdate', () => setProgress(audio.currentTime));
       audio.addEventListener('loadedmetadata', () => setDuration(audio.duration || 0));
@@ -95,53 +132,108 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return audioRef.current;
   }, []);
 
+  const iosPlayGenRef = useRef(0);
+
+  // iOS: native AVPlayer owns audio + Now Playing artwork.
   useEffect(() => {
-    if (!current) return;
-    const audio = getAudio();
-    const track = current;
-    audio.src = track.file;
+    if (!iosNative) return;
+    if (!current) {
+      iosPlayGenRef.current += 1;
+      void NowPlaying.stop().catch(() => undefined);
+      setIsPlaying(false);
+      setProgress(0);
+      setDuration(0);
+      return;
+    }
+
+    const gen = ++iosPlayGenRef.current;
     setProgress(0);
     setDuration(0);
+    void playNativeTrack(current)
+      .then(() => {
+        if (gen !== iosPlayGenRef.current) return;
+        setIsPlaying(true);
+      })
+      .catch(() => {
+        if (gen !== iosPlayGenRef.current) return;
+        setIsPlaying(false);
+      });
+  }, [current, iosNative, playNativeTrack]);
 
-    // WKWebView can overwrite MPNowPlayingInfoCenter when <audio> starts.
-    // Re-push metadata (with artwork) after playback actually begins.
-    const timers: number[] = [];
-    const republishArtwork = () => {
-      if (Capacitor.getPlatform() !== 'ios') return;
-      void syncMediaMetadata(track).then(() => syncPlaybackState(true, true));
-      timers.push(
-        window.setTimeout(() => {
-          void syncMediaMetadata(track).then(() => syncPlaybackState(true, true));
-        }, 400),
-        window.setTimeout(() => {
-          void syncMediaMetadata(track).then(() => syncPlaybackState(true, true));
-        }, 1200)
+  // Android / web: HTMLAudioElement.
+  useEffect(() => {
+    if (iosNative) return;
+    if (!current) return;
+    const audio = getAudio();
+    audio.src = current.file;
+    setProgress(0);
+    setDuration(0);
+    audio.play().catch(() => undefined);
+  }, [current, getAudio, iosNative]);
+
+  // iOS native player events.
+  useEffect(() => {
+    if (!iosNative) return;
+    let cancelled = false;
+    const handles: PluginListenerHandle[] = [];
+
+    const add = async () => {
+      handles.push(
+        await NowPlaying.addListener('timeupdate', (data) => {
+          if (cancelled) return;
+          setProgress(data.position);
+          if (data.duration > 0) setDuration(data.duration);
+          setIsPlaying(data.playing);
+        })
+      );
+      handles.push(
+        await NowPlaying.addListener('playing', () => {
+          if (!cancelled) setIsPlaying(true);
+        })
+      );
+      handles.push(
+        await NowPlaying.addListener('paused', () => {
+          if (!cancelled) setIsPlaying(false);
+        })
+      );
+      handles.push(
+        await NowPlaying.addListener('ended', () => {
+          if (!cancelled) handleEndedRef.current();
+        })
       );
     };
-    audio.addEventListener('playing', republishArtwork);
 
-    audio.play().catch(() => undefined);
+    void add();
     return () => {
-      audio.removeEventListener('playing', republishArtwork);
-      timers.forEach((id) => window.clearTimeout(id));
+      cancelled = true;
+      handles.forEach((h) => {
+        void h.remove().catch(() => undefined);
+      });
     };
-  }, [current, getAudio]);
+  }, [iosNative]);
 
   const playTrack = useCallback(
     (track: Track) => {
-      const audio = getAudio();
       if (currentRef.current && currentRef.current.id === track.id) {
-        audio.currentTime = 0;
-        setProgress(0);
-        audio.play().catch(() => undefined);
+        restartCurrent();
         return;
       }
       setCurrent(track);
     },
-    [getAudio]
+    [restartCurrent]
   );
 
   const toggle = useCallback(() => {
+    if (iosNative) {
+      if (isPlayingRef.current) {
+        void NowPlaying.pause().catch(() => undefined);
+        setIsPlaying(false);
+      } else {
+        void NowPlaying.resume().catch(() => undefined);
+        setIsPlaying(true);
+      }
+      return;
+    }
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) {
@@ -149,14 +241,21 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     } else {
       audio.pause();
     }
-  }, []);
+  }, [iosNative]);
 
-  const seek = useCallback((time: number) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.currentTime = time;
-    setProgress(time);
-  }, []);
+  const seek = useCallback(
+    (time: number) => {
+      setProgress(time);
+      if (iosNative) {
+        void NowPlaying.seek({ time }).catch(() => undefined);
+        return;
+      }
+      const audio = audioRef.current;
+      if (!audio) return;
+      audio.currentTime = time;
+    },
+    [iosNative]
+  );
 
   const volumeScrubbingRef = useRef(false);
   const volumeTimerRef = useRef<number | null>(null);
@@ -219,19 +318,30 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   useEffect(() => {
     void registerMediaActionHandlers({
       play: () => {
+        if (iosNative) {
+          void NowPlaying.resume().catch(() => undefined);
+          setIsPlaying(true);
+          return;
+        }
         audioRef.current?.play().catch(() => undefined);
       },
       pause: () => {
+        if (iosNative) {
+          void NowPlaying.pause().catch(() => undefined);
+          setIsPlaying(false);
+          return;
+        }
         audioRef.current?.pause();
       },
       previoustrack: prev,
       nexttrack: next,
       seekto: seek,
     });
-  }, [next, prev, seek]);
+  }, [iosNative, next, prev, seek]);
 
-  // Metadata first, then playback state — avoids empty artwork in the system UI.
+  // Android / web media session only.
   useEffect(() => {
+    if (iosNative) return;
     let cancelled = false;
     const run = async () => {
       await syncMediaMetadata(current, () => cancelled);
@@ -242,10 +352,11 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return () => {
       cancelled = true;
     };
-  }, [current, isPlaying]);
+  }, [current, isPlaying, iosNative]);
 
   const lastPositionSyncRef = useRef(0);
   useEffect(() => {
+    if (iosNative) return;
     if (!current || duration <= 0) return;
     const now = Date.now();
     const due = now - lastPositionSyncRef.current > 900;
@@ -253,7 +364,7 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     if (!due && !nearEnd && progress > 0.25) return;
     lastPositionSyncRef.current = now;
     void syncPositionState(progress, duration);
-  }, [progress, duration, current]);
+  }, [progress, duration, current, iosNative]);
 
   const value = useMemo<PlayerContextValue>(
     () => ({

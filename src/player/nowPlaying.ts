@@ -1,12 +1,35 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import type { PluginListenerHandle } from '@capacitor/core';
 
+export type NowPlayingAction = {
+  action: string;
+  seekTime?: number;
+};
+
+export type NowPlayingTimeUpdate = {
+  position: number;
+  duration: number;
+  playing: boolean;
+};
+
 export interface NowPlayingPlugin {
+  play(options: {
+    url: string;
+    title: string;
+    artist: string;
+    album: string;
+    artworkPath?: string;
+    artworkBase64?: string;
+  }): Promise<void>;
+  pause(): Promise<void>;
+  resume(): Promise<void>;
+  seek(options: { time: number }): Promise<void>;
+  stop(): Promise<void>;
+  getStatus(): Promise<{ position: number; duration: number; playing: boolean }>;
   setMetadata(options: {
     title: string;
     artist: string;
     album: string;
-    /** Relative path under Capacitor public/, e.g. assets/covers/boy.jpg */
     artworkPath?: string;
     artworkBase64?: string;
     artworkSrc?: string;
@@ -20,10 +43,20 @@ export interface NowPlayingPlugin {
   clear(): Promise<void>;
   addListener(
     eventName: 'action',
-    listenerFunc: (data: { action: string; seekTime?: number }) => void
+    listenerFunc: (data: NowPlayingAction) => void
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: 'timeupdate',
+    listenerFunc: (data: NowPlayingTimeUpdate) => void
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: 'playing' | 'paused' | 'ended',
+    listenerFunc: () => void
   ): Promise<PluginListenerHandle>;
 }
 
 export const NowPlaying = registerPlugin<NowPlayingPlugin>('NowPlaying');
 
 export const isIosNowPlaying = (): boolean => Capacitor.getPlatform() === 'ios';
+
+export const toPublicPath = (path: string): string => path.replace(/^\//, '');
