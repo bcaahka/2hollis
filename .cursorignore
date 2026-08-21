@@ -1,0 +1,52 @@
+﻿# Dependencies & build (keep Agent out of noise)
+node_modules/
+dist/
+www/
+coverage/
+.angular/
+.ionic/
+*.map
+
+# Capacitor synced / generated web copy (use src/ + public/ instead)
+ios/App/App/public/
+android/app/src/main/assets/public/
+android/app/build/
+android/build/
+android/.gradle/
+android/capacitor-cordova-android-plugins/
+ios/App/Pods/
+ios/Pods/
+ios/DerivedData/
+ios/App/build/
+platforms/
+plugins/
+
+# Lockfiles & package manager noise
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+*.lock
+
+# Large / binary media (paths known from songs.ts)
+public/assets/audio/
+**/*.mp3
+**/*.wav
+**/*.flac
+**/*.webp
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.ico
+
+# Secrets
+.env
+.env.*
+**/*.pem
+**/*.key
+**/*.keystore
+**/google-services.json
+**/GoogleService-Info.plist
+
+# Cypress / test dumps
+cypress/videos/
+cypress/screenshots/

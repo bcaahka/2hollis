@@ -1,0 +1,21 @@
+---
+description: Lean context — where code lives; avoid dumping huge trees
+alwaysApply: true
+---
+
+# Token-efficient project map
+
+## Prefer these paths
+- Player: `src/player/` (`PlayerProvider.tsx`, `mediaSession.ts`, `nowPlaying.ts`)
+- iOS Now Playing / AVPlayer: `ios/App/App/NowPlayingPlugin.swift`, `MainViewController.swift`
+- Tracks/covers: `src/data/songs.ts`, covers under `public/assets/covers/`
+- UI: `src/pages/`, `src/components/`
+
+## Do not
+- `@` whole `ios/`, `android/`, `node_modules/`, `dist/`, or `public/assets/audio/`
+- Paste large lockfiles or binary assets into context
+- Re-explore the whole repo when the task is clearly in `src/player` or one Swift file
+
+## Habit
+- Open/new chat per distinct task when context gets heavy
+- Grep/read only the files needed; use Explore subagent for broad “where is X” searches

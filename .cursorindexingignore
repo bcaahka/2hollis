@@ -1,0 +1,8 @@
+# Indexed search only — still @-mentionable if needed
+**/*.mp3
+**/*.wav
+public/assets/audio/
+ios/App/App/public/
+android/app/src/main/assets/public/
+package-lock.json
+*.map

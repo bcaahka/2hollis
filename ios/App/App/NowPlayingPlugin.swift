@@ -26,16 +26,22 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     private var endObserver: NSObjectProtocol?
     private var info: [String: Any] = [:]
     private var artworkImage: UIImage?
+    /// Keep one artwork wrapper — recreating it on every Now Playing write drops the cover on iOS.
+    private var artworkItem: MPMediaItemArtwork?
     private var isPlayingFlag = false
-    private var lastNowPlayingProgressAt: CFTimeInterval = 0
+    /// True while a track is loaded (playing or paused). Cleared only on stop/clear.
+    private var hasActiveTrack = false
+    private var lifecycleObservers: [NSObjectProtocol] = []
 
     override public func load() {
         UIApplication.shared.beginReceivingRemoteControlEvents()
         setupRemoteCommands()
         activateAudioSession()
+        setupLifecycleObservers()
     }
 
     deinit {
+        lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
         tearDownPlayer()
     }
 
@@ -81,15 +87,16 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
                     MPNowPlayingInfoPropertyElapsedPlaybackTime: 0.0
                 ]
 
-                self.artworkImage = artwork
-                self.applyArtworkToInfo()
-                self.publishMetadata()
+                self.hasActiveTrack = true
+                self.setArtwork(artwork)
+                self.publishNowPlaying()
                 self.attachObservers(to: player, item: item)
                 player.play()
                 self.isPlayingFlag = true
                 // One reinforce after AVPlayer starts — not a loop (loops drop artwork on iOS).
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                    self?.publishMetadata()
+                    guard let self = self, self.player === player else { return }
+                    self.publishNowPlaying()
                 }
                 self.notifyListeners("playing", data: [:])
                 call.resolve()
@@ -99,9 +106,11 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func pause(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
+            // Keep AVPlayer + Now Playing card alive (Yandex Music style) — only freeze rate.
+            self.activateAudioSession()
             self.player?.pause()
             self.isPlayingFlag = false
-            self.publishProgress(force: true)
+            self.publishNowPlaying()
             self.notifyListeners("paused", data: [:])
             call.resolve()
         }
@@ -112,7 +121,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
             self.activateAudioSession()
             self.player?.play()
             self.isPlayingFlag = true
-            self.publishProgress(force: true)
+            self.publishNowPlaying()
             self.notifyListeners("playing", data: [:])
             call.resolve()
         }
@@ -130,8 +139,8 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
                     call.resolve()
                     return
                 }
-                self.publishProgress(force: true)
-                self.emitTimeUpdate(toJS: true, toNowPlaying: false)
+                self.publishNowPlaying()
+                self.emitTimeUpdate()
                 call.resolve()
             }
         }
@@ -141,7 +150,8 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         DispatchQueue.main.async {
             self.tearDownPlayer()
             self.isPlayingFlag = false
-            self.artworkImage = nil
+            self.hasActiveTrack = false
+            self.setArtwork(nil)
             self.info.removeAll()
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             call.resolve()
@@ -179,10 +189,12 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
                 self.info[MPNowPlayingInfoPropertyMediaType] =
                     NSNumber(value: MPNowPlayingInfoMediaType.audio.rawValue)
                 if let image = image {
-                    self.artworkImage = image
+                    self.setArtwork(image)
                 }
-                self.applyArtworkToInfo()
-                self.publishMetadata()
+                if !self.info.isEmpty {
+                    self.hasActiveTrack = true
+                }
+                self.publishNowPlaying()
                 call.resolve()
             }
         }
@@ -191,8 +203,16 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func setPlaybackState(_ call: CAPPluginCall) {
         let state = call.getString("playbackState") ?? "none"
         DispatchQueue.main.async {
+            // "paused" / "playing" keep the card; only explicit stop/clear dismisses it.
+            if state == "none" {
+                call.resolve()
+                return
+            }
             self.isPlayingFlag = (state == "playing")
-            self.publishProgress(force: true)
+            if self.hasActiveTrack {
+                self.activateAudioSession()
+                self.publishNowPlaying()
+            }
             call.resolve()
         }
     }
@@ -209,7 +229,9 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
             if let rate = call.getDouble("playbackRate") {
                 self.info[MPNowPlayingInfoPropertyPlaybackRate] = rate
             }
-            self.publishProgress(force: true)
+            if self.hasActiveTrack {
+                self.publishNowPlaying()
+            }
             call.resolve()
         }
     }
@@ -218,7 +240,8 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         DispatchQueue.main.async {
             self.tearDownPlayer()
             self.isPlayingFlag = false
-            self.artworkImage = nil
+            self.hasActiveTrack = false
+            self.setArtwork(nil)
             self.info.removeAll()
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             call.resolve()
@@ -228,12 +251,13 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     // MARK: - Player helpers
 
     private func attachObservers(to player: AVPlayer, item: AVPlayerItem) {
-        // JS UI can update often; Now Playing Center must NOT — frequent writes drop artwork.
+        // Frequent Now Playing writes drop artwork. Only push progress to JS here;
+        // lock screen uses ElapsedPlaybackTime + PlaybackRate to animate on its own.
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
             queue: .main
         ) { [weak self] _ in
-            self?.emitTimeUpdate(toJS: true, toNowPlaying: true)
+            self?.emitTimeUpdate()
         }
 
         endObserver = NotificationCenter.default.addObserver(
@@ -242,8 +266,9 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
             queue: .main
         ) { [weak self] _ in
             guard let self = self else { return }
+            // Stay on lock screen / Control Center with cover until next track or stop.
             self.isPlayingFlag = false
-            self.publishProgress(force: true)
+            self.publishNowPlaying()
             self.notifyListeners("ended", data: [:])
         }
 
@@ -255,9 +280,8 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
                 let duration = self.playerDuration()
                 if duration > 0 {
                     self.info[MPMediaItemPropertyPlaybackDuration] = duration
-                    // Duration is metadata-ish; re-publish full info once so artwork stays.
-                    self.publishMetadata()
-                    self.emitTimeUpdate(toJS: true, toNowPlaying: false)
+                    self.publishNowPlaying()
+                    self.emitTimeUpdate()
                 }
             }
         }
@@ -284,79 +308,74 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         return assetSeconds.isFinite && assetSeconds > 0 ? assetSeconds : 0
     }
 
+    private func setArtwork(_ image: UIImage?) {
+        artworkImage = image
+        artworkItem = nil
+        if let image = image {
+            let size = CGSize(
+                width: max(image.size.width, 600),
+                height: max(image.size.height, 600)
+            )
+            artworkItem = MPMediaItemArtwork(boundsSize: size) { _ in image }
+        }
+    }
+
     private func applyArtworkToInfo() {
-        guard let image = artworkImage else {
+        if let artworkItem = artworkItem {
+            info[MPMediaItemPropertyArtwork] = artworkItem
+        } else {
             info.removeValue(forKey: MPMediaItemPropertyArtwork)
-            return
         }
-        let size = CGSize(
-            width: max(image.size.width, 600),
-            height: max(image.size.height, 600)
-        )
-        // Capture image strongly so the request handler never returns nil.
-        info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: size) { _ in image }
     }
 
-    /// Full metadata write (title/artist/artwork). Call sparingly.
-    private func publishMetadata() {
+    /// Always write from local `info` (with cached artwork). Never round-trip the center.
+    private func publishNowPlaying() {
+        guard hasActiveTrack, !info.isEmpty else { return }
+        syncPlaybackFields()
         applyArtworkToInfo()
-        info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
-        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlayingFlag ? 1.0 : 0.0
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        lastNowPlayingProgressAt = CACurrentMediaTime()
     }
 
-    /// Patch only progress fields. Avoid rewriting artwork every tick (iOS drops it).
-    private func publishProgress(force: Bool) {
-        let now = CACurrentMediaTime()
-        if !force && now - lastNowPlayingProgressAt < 1.0 {
-            return
-        }
-        lastNowPlayingProgressAt = now
-
+    private func syncPlaybackFields() {
         let position = player?.currentTime().seconds ?? 0
         let safePosition = position.isFinite ? max(0, position) : 0
         let duration = playerDuration()
-
-        var current = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? info
-        current[MPNowPlayingInfoPropertyElapsedPlaybackTime] = safePosition
-        if duration > 0 {
-            current[MPMediaItemPropertyPlaybackDuration] = duration
-        }
-        current[MPNowPlayingInfoPropertyPlaybackRate] = isPlayingFlag ? 1.0 : 0.0
-        current[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
-
-        // If system dropped artwork, put it back without a full metadata churn every time.
-        if current[MPMediaItemPropertyArtwork] == nil, let image = artworkImage {
-            let size = CGSize(width: max(image.size.width, 600), height: max(image.size.height, 600))
-            current[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: size) { _ in image }
-        }
 
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = safePosition
         if duration > 0 {
             info[MPMediaItemPropertyPlaybackDuration] = duration
         }
+        // rate 0 = paused, but card + artwork stay (like Yandex Music).
         info[MPNowPlayingInfoPropertyPlaybackRate] = isPlayingFlag ? 1.0 : 0.0
-
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = current
+        info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
+        info[MPNowPlayingInfoPropertyMediaType] =
+            NSNumber(value: MPNowPlayingInfoMediaType.audio.rawValue)
     }
 
-    private func emitTimeUpdate(toJS: Bool, toNowPlaying: Bool) {
+    private func setupLifecycleObservers() {
+        let center = NotificationCenter.default
+        let reassert: (Notification) -> Void = { [weak self] _ in
+            guard let self = self, self.hasActiveTrack else { return }
+            self.activateAudioSession()
+            self.publishNowPlaying()
+        }
+        lifecycleObservers = [
+            center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main, using: reassert),
+            center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main, using: reassert),
+            center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main, using: reassert),
+        ]
+    }
+
+    private func emitTimeUpdate() {
         let position = player?.currentTime().seconds ?? 0
         let duration = playerDuration()
         let safePosition = position.isFinite ? max(0, position) : 0
 
-        if toNowPlaying {
-            publishProgress(force: false)
-        }
-
-        if toJS {
-            notifyListeners("timeupdate", data: [
-                "position": safePosition,
-                "duration": duration,
-                "playing": isPlayingFlag
-            ])
-        }
+        notifyListeners("timeupdate", data: [
+            "position": safePosition,
+            "duration": duration,
+            "playing": isPlayingFlag
+        ])
     }
 
     private func activateAudioSession() {
@@ -375,9 +394,10 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         center.playCommand.isEnabled = true
         center.playCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
+            self.activateAudioSession()
             self.player?.play()
             self.isPlayingFlag = true
-            self.publishProgress(force: true)
+            self.publishNowPlaying()
             self.notifyListeners("playing", data: [:])
             self.notifyListeners("action", data: ["action": "play"])
             return .success
@@ -386,9 +406,10 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         center.pauseCommand.isEnabled = true
         center.pauseCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
+            self.activateAudioSession()
             self.player?.pause()
             self.isPlayingFlag = false
-            self.publishProgress(force: true)
+            self.publishNowPlaying()
             self.notifyListeners("paused", data: [:])
             self.notifyListeners("action", data: ["action": "pause"])
             return .success
@@ -416,8 +437,8 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
             let cm = CMTime(seconds: max(0, time), preferredTimescale: 600)
             self.player?.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                 guard let self = self, finished else { return }
-                self.publishProgress(force: true)
-                self.emitTimeUpdate(toJS: true, toNowPlaying: false)
+                self.publishNowPlaying()
+                self.emitTimeUpdate()
             }
             self.notifyListeners("action", data: [
                 "action": "seekto",
