@@ -6,16 +6,7 @@ import type { Track } from '../data/songs';
 const artworkCache = new Map<string, string>();
 const ART_SIZE = 320;
 
-const loadImage = (src: string): Promise<HTMLImageElement> =>
-  new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('image load failed'));
-    img.src = src;
-  });
-
-/** Compact JPEG data-URL — large base64 breaks Android MediaSession bridge and sticky artwork. */
-const toCompactJpeg = async (source: CanvasImageSource | string): Promise<string> => {
+const bitmapToJpeg = (source: CanvasImageSource, sw: number, sh: number): string => {
   const canvas = document.createElement('canvas');
   canvas.width = ART_SIZE;
   canvas.height = ART_SIZE;
@@ -25,20 +16,15 @@ const toCompactJpeg = async (source: CanvasImageSource | string): Promise<string
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, ART_SIZE, ART_SIZE);
 
-  if (typeof source === 'string') {
-    const img = await loadImage(source);
-    const scale = Math.max(ART_SIZE / img.width, ART_SIZE / img.height);
-    const w = img.width * scale;
-    const h = img.height * scale;
-    ctx.drawImage(img, (ART_SIZE - w) / 2, (ART_SIZE - h) / 2, w, h);
-  } else {
-    ctx.drawImage(source, 0, 0, ART_SIZE, ART_SIZE);
-  }
+  const scale = Math.max(ART_SIZE / sw, ART_SIZE / sh);
+  const w = sw * scale;
+  const h = sh * scale;
+  ctx.drawImage(source, (ART_SIZE - w) / 2, (ART_SIZE - h) / 2, w, h);
 
-  return canvas.toDataURL('image/jpeg', 0.82);
+  return canvas.toDataURL('image/jpeg', 0.85);
 };
 
-const fallbackArtwork = async (album: string): Promise<string> => {
+const fallbackArtwork = (album: string): string => {
   const key = `fallback:${album}:${ART_SIZE}`;
   const cached = artworkCache.get(key);
   if (cached) return cached;
@@ -64,16 +50,59 @@ const fallbackArtwork = async (album: string): Promise<string> => {
   return dataUrl;
 };
 
+const fetchCoverBlob = async (path: string): Promise<Blob | null> => {
+  const candidates = [Capacitor.convertFileSrc(path), path];
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const blob = await res.blob();
+      if (blob.size > 0) return blob;
+    } catch {
+      // try next candidate
+    }
+  }
+  return null;
+};
+
+/** Load cover via fetch+ImageBitmap — avoids CORS-tainted canvas from convertFileSrc Image(). */
 const coverToDataUrl = async (path: string): Promise<string | undefined> => {
   const key = `${path}:${ART_SIZE}`;
   const cached = artworkCache.get(key);
   if (cached) return cached;
+
   try {
-    const url = Capacitor.convertFileSrc(path);
-    const dataUrl = await toCompactJpeg(url);
-    if (!dataUrl.startsWith('data:image/')) return undefined;
-    artworkCache.set(key, dataUrl);
-    return dataUrl;
+    const blob = await fetchCoverBlob(path);
+    if (!blob) return undefined;
+
+    if (typeof createImageBitmap === 'function') {
+      const bitmap = await createImageBitmap(blob);
+      try {
+        const dataUrl = bitmapToJpeg(bitmap, bitmap.width, bitmap.height);
+        if (!dataUrl.startsWith('data:image/')) return undefined;
+        artworkCache.set(key, dataUrl);
+        return dataUrl;
+      } finally {
+        bitmap.close();
+      }
+    }
+
+    // Fallback path for older WebViews
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error('img'));
+        el.src = objectUrl;
+      });
+      const dataUrl = bitmapToJpeg(img, img.naturalWidth, img.naturalHeight);
+      if (!dataUrl.startsWith('data:image/')) return undefined;
+      artworkCache.set(key, dataUrl);
+      return dataUrl;
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
   } catch {
     return undefined;
   }
@@ -100,13 +129,26 @@ export const syncMediaMetadata = async (
   const artworkSrc = await resolveArtwork(track);
   if (isCancelled?.()) return;
 
+  const artwork: { src: string; sizes: string; type: string }[] = [];
+  if (artworkSrc) {
+    artwork.push({ src: artworkSrc, sizes: `${ART_SIZE}x${ART_SIZE}`, type: 'image/jpeg' });
+  }
+
+  // iOS Web Media Session sometimes prefers a fetchable file URL alongside data URLs.
+  const cover = coverFor(track);
+  if (cover && Capacitor.getPlatform() === 'ios') {
+    artwork.push({
+      src: Capacitor.convertFileSrc(cover),
+      sizes: '512x512',
+      type: 'image/jpeg',
+    });
+  }
+
   await MediaSession.setMetadata({
     title: track.title,
     artist: '2hollis',
     album: track.album,
-    artwork: artworkSrc
-      ? [{ src: artworkSrc, sizes: `${ART_SIZE}x${ART_SIZE}`, type: 'image/jpeg' }]
-      : undefined,
+    artwork: artwork.length ? artwork : undefined,
   }).catch(() => undefined);
 };
 
