@@ -1,0 +1,65 @@
+.cover {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+.cover-img-wrap {
+  background: #000;
+}
+
+.cover-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cover-logo {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  font-size: 10px;
+  font-weight: 300;
+  letter-spacing: 0.3em;
+  color: var(--fg-strong);
+}
+
+.cover-year {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--fg);
+}
+
+.cover-letter {
+  font-size: 7em;
+  font-weight: 300;
+  line-height: 1;
+  color: var(--fg-strong);
+  text-transform: uppercase;
+}
+
+.cover-album {
+  position: absolute;
+  bottom: 12px;
+  left: 14px;
+  right: 14px;
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  color: var(--fg-strong);
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

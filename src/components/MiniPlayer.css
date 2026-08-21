@@ -1,0 +1,93 @@
+.mini {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(12px + var(--ion-safe-area-bottom, 0px));
+  height: 66px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px 8px 8px;
+  z-index: 100;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.mini-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
+  transition: width 0.2s linear;
+}
+
+.mini .cover {
+  width: 48px;
+  height: 48px;
+  flex: none;
+}
+
+.mini .cover-letter {
+  font-size: 2.2em;
+}
+
+.mini .cover-logo,
+.mini .cover-year {
+  display: none;
+}
+
+.mini .cover-album {
+  bottom: 4px;
+  left: 6px;
+  right: 6px;
+  font-size: 6px;
+  letter-spacing: 0.15em;
+}
+
+.mini-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.mini-title {
+  font-size: 13px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--fg-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mini-album {
+  font-size: 10px;
+  font-weight: 300;
+  letter-spacing: 0.2em;
+  color: var(--fg);
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
+.mini-play {
+  flex: none;
+  width: 42px;
+  height: 42px;
+  border: none;
+  border-radius: 0;
+  background: var(--fg-strong);
+  color: var(--fg-invert);
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.mini-play:active {
+  opacity: 0.8;
+}

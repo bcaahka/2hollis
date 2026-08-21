@@ -1,0 +1,66 @@
+/* 2HOLLIS player — design system from shop.2hollis.life */
+/* Helvetica 300, uppercase, sharp corners (radius 0), 1px borders, red accent */
+
+:root {
+  --ion-font-family: Helvetica, Arial, sans-serif;
+
+  /* light (store) */
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --fg: #757575; /* hsl 0 0% 46% */
+  --fg-strong: #0d0d0d; /* hsl 0 0% 5% */
+  --fg-invert: #f2f2f2; /* hsl 0 0% 95% */
+  --subtle: #a3a3a3;
+  --accent: #b91c1c; /* hsl 0 74% 42% */
+  --line: #757575;
+  --bar: #d9d9d9;
+
+  --ion-background-color: var(--bg);
+  --ion-background-color-rgb: 255, 255, 255;
+  --ion-text-color: var(--fg-strong);
+  --ion-text-color-rgb: 13, 13, 13;
+  --ion-border-color: var(--line);
+  --ion-color-primary: var(--accent);
+  --ion-color-primary-rgb: 185, 28, 28;
+}
+
+body.ion-palette-dark {
+  /* dark (store scheme3) */
+  --bg: #030711; /* hsl 224 71% 4% */
+  --surface: #111827; /* hsl 221 39% 11% */
+  --fg: #e5e7ea; /* hsl 220 13% 91% */
+  --fg-strong: #f8fafb; /* hsl 210 20% 98% */
+  --fg-invert: #0d0d0d;
+  --subtle: #8b93a1;
+  --accent: #b91c1c;
+  --line: #384252; /* hsl 217 19% 27% */
+  --bar: #384252;
+
+  --ion-background-color: var(--bg);
+  --ion-background-color-rgb: 3, 7, 17;
+  --ion-text-color: var(--fg-strong);
+  --ion-text-color-rgb: 248, 250, 251;
+  --ion-border-color: var(--line);
+  --ion-color-primary: var(--accent);
+  --ion-color-primary-rgb: 185, 28, 28;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+ion-content {
+  --background: var(--bg);
+}
+
+ion-range {
+  --knob-background: var(--fg-strong);
+  --knob-size: 12px;
+  --knob-box-shadow: none;
+  --bar-background: var(--bar);
+  --bar-background-active: var(--accent);
+  --bar-height: 2px;
+  --bar-border-radius: 0;
+}
