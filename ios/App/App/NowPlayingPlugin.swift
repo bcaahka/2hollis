@@ -25,7 +25,9 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
     private var info: [String: Any] = [:]
+    private var artworkImage: UIImage?
     private var isPlayingFlag = false
+    private var lastNowPlayingProgressAt: CFTimeInterval = 0
 
     override public func load() {
         UIApplication.shared.beginReceivingRemoteControlEvents()
@@ -79,18 +81,16 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
                     MPNowPlayingInfoPropertyElapsedPlaybackTime: 0.0
                 ]
 
-                if let artwork = artwork {
-                    let size = CGSize(
-                        width: max(artwork.size.width, 600),
-                        height: max(artwork.size.height, 600)
-                    )
-                    self.info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: size) { _ in artwork }
-                }
-
-                self.publish()
+                self.artworkImage = artwork
+                self.applyArtworkToInfo()
+                self.publishMetadata()
                 self.attachObservers(to: player, item: item)
                 player.play()
                 self.isPlayingFlag = true
+                // One reinforce after AVPlayer starts — not a loop (loops drop artwork on iOS).
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                    self?.publishMetadata()
+                }
                 self.notifyListeners("playing", data: [:])
                 call.resolve()
             }
@@ -101,9 +101,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         DispatchQueue.main.async {
             self.player?.pause()
             self.isPlayingFlag = false
-            self.info[MPNowPlayingInfoPropertyPlaybackRate] = 0.0
-            self.syncElapsedFromPlayer()
-            self.publish()
+            self.publishProgress(force: true)
             self.notifyListeners("paused", data: [:])
             call.resolve()
         }
@@ -114,9 +112,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
             self.activateAudioSession()
             self.player?.play()
             self.isPlayingFlag = true
-            self.info[MPNowPlayingInfoPropertyPlaybackRate] = 1.0
-            self.syncElapsedFromPlayer()
-            self.publish()
+            self.publishProgress(force: true)
             self.notifyListeners("playing", data: [:])
             call.resolve()
         }
@@ -134,9 +130,8 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
                     call.resolve()
                     return
                 }
-                self.info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = max(0, time)
-                self.publish()
-                self.emitTimeUpdate()
+                self.publishProgress(force: true)
+                self.emitTimeUpdate(toJS: true, toNowPlaying: false)
                 call.resolve()
             }
         }
@@ -146,6 +141,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         DispatchQueue.main.async {
             self.tearDownPlayer()
             self.isPlayingFlag = false
+            self.artworkImage = nil
             self.info.removeAll()
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             call.resolve()
@@ -183,10 +179,10 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
                 self.info[MPNowPlayingInfoPropertyMediaType] =
                     NSNumber(value: MPNowPlayingInfoMediaType.audio.rawValue)
                 if let image = image {
-                    let size = CGSize(width: max(image.size.width, 600), height: max(image.size.height, 600))
-                    self.info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: size) { _ in image }
+                    self.artworkImage = image
                 }
-                self.publish()
+                self.applyArtworkToInfo()
+                self.publishMetadata()
                 call.resolve()
             }
         }
@@ -195,14 +191,8 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func setPlaybackState(_ call: CAPPluginCall) {
         let state = call.getString("playbackState") ?? "none"
         DispatchQueue.main.async {
-            switch state {
-            case "playing":
-                self.info[MPNowPlayingInfoPropertyPlaybackRate] = 1.0
-            default:
-                self.info[MPNowPlayingInfoPropertyPlaybackRate] = 0.0
-            }
-            self.info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
-            self.publish()
+            self.isPlayingFlag = (state == "playing")
+            self.publishProgress(force: true)
             call.resolve()
         }
     }
@@ -219,8 +209,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
             if let rate = call.getDouble("playbackRate") {
                 self.info[MPNowPlayingInfoPropertyPlaybackRate] = rate
             }
-            self.info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
-            self.publish()
+            self.publishProgress(force: true)
             call.resolve()
         }
     }
@@ -229,6 +218,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         DispatchQueue.main.async {
             self.tearDownPlayer()
             self.isPlayingFlag = false
+            self.artworkImage = nil
             self.info.removeAll()
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             call.resolve()
@@ -238,11 +228,12 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     // MARK: - Player helpers
 
     private func attachObservers(to player: AVPlayer, item: AVPlayerItem) {
+        // JS UI can update often; Now Playing Center must NOT — frequent writes drop artwork.
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
             queue: .main
         ) { [weak self] _ in
-            self?.emitTimeUpdate()
+            self?.emitTimeUpdate(toJS: true, toNowPlaying: true)
         }
 
         endObserver = NotificationCenter.default.addObserver(
@@ -252,8 +243,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         ) { [weak self] _ in
             guard let self = self else { return }
             self.isPlayingFlag = false
-            self.info[MPNowPlayingInfoPropertyPlaybackRate] = 0.0
-            self.publish()
+            self.publishProgress(force: true)
             self.notifyListeners("ended", data: [:])
         }
 
@@ -265,8 +255,9 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
                 let duration = self.playerDuration()
                 if duration > 0 {
                     self.info[MPMediaItemPropertyPlaybackDuration] = duration
-                    self.publish()
-                    self.emitTimeUpdate()
+                    // Duration is metadata-ish; re-publish full info once so artwork stays.
+                    self.publishMetadata()
+                    self.emitTimeUpdate(toJS: true, toNowPlaying: false)
                 }
             }
         }
@@ -293,32 +284,79 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         return assetSeconds.isFinite && assetSeconds > 0 ? assetSeconds : 0
     }
 
-    private func syncElapsedFromPlayer() {
-        let position = player?.currentTime().seconds ?? 0
-        if position.isFinite {
-            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = max(0, position)
+    private func applyArtworkToInfo() {
+        guard let image = artworkImage else {
+            info.removeValue(forKey: MPMediaItemPropertyArtwork)
+            return
         }
+        let size = CGSize(
+            width: max(image.size.width, 600),
+            height: max(image.size.height, 600)
+        )
+        // Capture image strongly so the request handler never returns nil.
+        info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: size) { _ in image }
     }
 
-    private func emitTimeUpdate() {
+    /// Full metadata write (title/artist/artwork). Call sparingly.
+    private func publishMetadata() {
+        applyArtworkToInfo()
+        info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
+        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlayingFlag ? 1.0 : 0.0
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        lastNowPlayingProgressAt = CACurrentMediaTime()
+    }
+
+    /// Patch only progress fields. Avoid rewriting artwork every tick (iOS drops it).
+    private func publishProgress(force: Bool) {
+        let now = CACurrentMediaTime()
+        if !force && now - lastNowPlayingProgressAt < 1.0 {
+            return
+        }
+        lastNowPlayingProgressAt = now
+
         let position = player?.currentTime().seconds ?? 0
-        let duration = playerDuration()
         let safePosition = position.isFinite ? max(0, position) : 0
+        let duration = playerDuration()
+
+        var current = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? info
+        current[MPNowPlayingInfoPropertyElapsedPlaybackTime] = safePosition
+        if duration > 0 {
+            current[MPMediaItemPropertyPlaybackDuration] = duration
+        }
+        current[MPNowPlayingInfoPropertyPlaybackRate] = isPlayingFlag ? 1.0 : 0.0
+        current[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
+
+        // If system dropped artwork, put it back without a full metadata churn every time.
+        if current[MPMediaItemPropertyArtwork] == nil, let image = artworkImage {
+            let size = CGSize(width: max(image.size.width, 600), height: max(image.size.height, 600))
+            current[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: size) { _ in image }
+        }
+
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = safePosition
         if duration > 0 {
             info[MPMediaItemPropertyPlaybackDuration] = duration
         }
         info[MPNowPlayingInfoPropertyPlaybackRate] = isPlayingFlag ? 1.0 : 0.0
-        publish()
-        notifyListeners("timeupdate", data: [
-            "position": safePosition,
-            "duration": duration,
-            "playing": isPlayingFlag
-        ])
+
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = current
     }
 
-    private func publish() {
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    private func emitTimeUpdate(toJS: Bool, toNowPlaying: Bool) {
+        let position = player?.currentTime().seconds ?? 0
+        let duration = playerDuration()
+        let safePosition = position.isFinite ? max(0, position) : 0
+
+        if toNowPlaying {
+            publishProgress(force: false)
+        }
+
+        if toJS {
+            notifyListeners("timeupdate", data: [
+                "position": safePosition,
+                "duration": duration,
+                "playing": isPlayingFlag
+            ])
+        }
     }
 
     private func activateAudioSession() {
@@ -339,9 +377,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return .commandFailed }
             self.player?.play()
             self.isPlayingFlag = true
-            self.info[MPNowPlayingInfoPropertyPlaybackRate] = 1.0
-            self.syncElapsedFromPlayer()
-            self.publish()
+            self.publishProgress(force: true)
             self.notifyListeners("playing", data: [:])
             self.notifyListeners("action", data: ["action": "play"])
             return .success
@@ -352,9 +388,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return .commandFailed }
             self.player?.pause()
             self.isPlayingFlag = false
-            self.info[MPNowPlayingInfoPropertyPlaybackRate] = 0.0
-            self.syncElapsedFromPlayer()
-            self.publish()
+            self.publishProgress(force: true)
             self.notifyListeners("paused", data: [:])
             self.notifyListeners("action", data: ["action": "pause"])
             return .success
@@ -382,9 +416,8 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
             let cm = CMTime(seconds: max(0, time), preferredTimescale: 600)
             self.player?.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                 guard let self = self, finished else { return }
-                self.info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = max(0, time)
-                self.publish()
-                self.emitTimeUpdate()
+                self.publishProgress(force: true)
+                self.emitTimeUpdate(toJS: true, toNowPlaying: false)
             }
             self.notifyListeners("action", data: [
                 "action": "seekto",
