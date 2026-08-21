@@ -1,7 +1,9 @@
 import { Capacitor } from '@capacitor/core';
-import { MediaSession } from '@capgo/capacitor-media-session';
+import type { PluginListenerHandle } from '@capacitor/core';
+import { Directory, Filesystem } from '@capacitor/filesystem';
 import { coverFor } from '../data/songs';
 import type { Track } from '../data/songs';
+import { NativeMediaSession } from './capMediaSession';
 
 const artworkCache = new Map<string, string>();
 const ART_SIZE = 320;
@@ -59,13 +61,12 @@ const fetchCoverBlob = async (path: string): Promise<Blob | null> => {
       const blob = await res.blob();
       if (blob.size > 0) return blob;
     } catch {
-      // try next candidate
+      // try next
     }
   }
   return null;
 };
 
-/** Load cover via fetch+ImageBitmap — avoids CORS-tainted canvas from convertFileSrc Image(). */
 const coverToDataUrl = async (path: string): Promise<string | undefined> => {
   const key = `${path}:${ART_SIZE}`;
   const cached = artworkCache.get(key);
@@ -87,7 +88,6 @@ const coverToDataUrl = async (path: string): Promise<string | undefined> => {
       }
     }
 
-    // Fallback path for older WebViews
     const objectUrl = URL.createObjectURL(blob);
     try {
       const img = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -117,50 +117,63 @@ export const resolveArtwork = async (track: Track): Promise<string> => {
   return fallbackArtwork(track.album);
 };
 
+/** iOS MPNowPlayingInfoCenter loads file:// artwork; data URLs are unreliable system-side. */
+const toIosArtworkFileUrl = async (dataUrl: string, trackId: string): Promise<string | undefined> => {
+  try {
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    const path = `now-playing-${trackId}.jpg`;
+    await Filesystem.writeFile({
+      path,
+      data: base64,
+      directory: Directory.Cache,
+    });
+    const { uri } = await Filesystem.getUri({
+      path,
+      directory: Directory.Cache,
+    });
+    return uri;
+  } catch {
+    return undefined;
+  }
+};
+
 export const syncMediaMetadata = async (
   track: Track | null,
   isCancelled?: () => boolean
 ): Promise<void> => {
   if (!track) {
-    await MediaSession.setPlaybackState({ playbackState: 'none' }).catch(() => undefined);
+    await NativeMediaSession.setPlaybackState({ playbackState: 'none' }).catch(() => undefined);
     return;
   }
 
-  const artworkSrc = await resolveArtwork(track);
+  const dataUrl = await resolveArtwork(track);
   if (isCancelled?.()) return;
 
-  const artwork: { src: string; sizes: string; type: string }[] = [];
-  if (artworkSrc) {
-    artwork.push({ src: artworkSrc, sizes: `${ART_SIZE}x${ART_SIZE}`, type: 'image/jpeg' });
+  let artworkSrc = dataUrl;
+  if (Capacitor.getPlatform() === 'ios' && dataUrl.startsWith('data:')) {
+    artworkSrc = (await toIosArtworkFileUrl(dataUrl, track.id)) ?? dataUrl;
   }
+  if (isCancelled?.()) return;
 
-  // iOS Web Media Session sometimes prefers a fetchable file URL alongside data URLs.
-  const cover = coverFor(track);
-  if (cover && Capacitor.getPlatform() === 'ios') {
-    artwork.push({
-      src: Capacitor.convertFileSrc(cover),
-      sizes: '512x512',
-      type: 'image/jpeg',
-    });
-  }
-
-  await MediaSession.setMetadata({
+  await NativeMediaSession.setMetadata({
     title: track.title,
     artist: '2hollis',
     album: track.album,
-    artwork: artwork.length ? artwork : undefined,
+    artwork: artworkSrc
+      ? [{ src: artworkSrc, sizes: `${ART_SIZE}x${ART_SIZE}`, type: 'image/jpeg' }]
+      : undefined,
   }).catch(() => undefined);
 };
 
 export const syncPlaybackState = async (isPlaying: boolean, hasTrack: boolean): Promise<void> => {
-  await MediaSession.setPlaybackState({
+  await NativeMediaSession.setPlaybackState({
     playbackState: !hasTrack ? 'none' : isPlaying ? 'playing' : 'paused',
   }).catch(() => undefined);
 };
 
 export const syncPositionState = async (position: number, duration: number): Promise<void> => {
   if (!Number.isFinite(duration) || duration <= 0) return;
-  await MediaSession.setPositionState({
+  await NativeMediaSession.setPositionState({
     position: Math.max(0, Math.min(position, duration)),
     duration,
     playbackRate: 1,
@@ -175,14 +188,34 @@ export type MediaActionHandlers = {
   seekto: (seekTime: number) => void;
 };
 
+let iosActionListener: PluginListenerHandle | null = null;
+
 export const registerMediaActionHandlers = async (handlers: MediaActionHandlers): Promise<void> => {
-  await MediaSession.setActionHandler({ action: 'play' }, () => handlers.play()).catch(() => undefined);
-  await MediaSession.setActionHandler({ action: 'pause' }, () => handlers.pause()).catch(() => undefined);
-  await MediaSession.setActionHandler({ action: 'previoustrack' }, () => handlers.previoustrack()).catch(
-    () => undefined
-  );
-  await MediaSession.setActionHandler({ action: 'nexttrack' }, () => handlers.nexttrack()).catch(() => undefined);
-  await MediaSession.setActionHandler({ action: 'seekto' }, (details) => {
-    if (details.seekTime != null) handlers.seekto(details.seekTime);
-  }).catch(() => undefined);
+  const run = (action: string, seekTime?: number | null) => {
+    if (action === 'seekto') {
+      if (seekTime != null) handlers.seekto(seekTime);
+      return;
+    }
+    if (action === 'play') handlers.play();
+    else if (action === 'pause') handlers.pause();
+    else if (action === 'previoustrack') handlers.previoustrack();
+    else if (action === 'nexttrack') handlers.nexttrack();
+  };
+
+  for (const action of ['play', 'pause', 'previoustrack', 'nexttrack', 'seekto'] as const) {
+    await NativeMediaSession.setActionHandler({ action }, (details) => {
+      run(details.action, details.seekTime);
+    }).catch(() => undefined);
+  }
+
+  // Native iOS Capgo plugin emits actions via listener (not the JS callback).
+  if (Capacitor.getPlatform() === 'ios') {
+    if (iosActionListener) {
+      await iosActionListener.remove().catch(() => undefined);
+      iosActionListener = null;
+    }
+    iosActionListener = await NativeMediaSession.addListener('actionHandler', (data) => {
+      run(data.action, data.seekTime);
+    });
+  }
 };
