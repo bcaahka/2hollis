@@ -80,6 +80,9 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     if (!audioRef.current) {
       const audio = new Audio();
       audio.preload = 'metadata';
+      audio.setAttribute('playsinline', 'true');
+      // Reduce WKWebView claiming Now Playing without our artwork.
+      (audio as HTMLAudioElement & { disableRemotePlayback?: boolean }).disableRemotePlayback = true;
       audio.volume = Capacitor.isNativePlatform() ? 1 : volumeRef.current;
       audio.addEventListener('timeupdate', () => setProgress(audio.currentTime));
       audio.addEventListener('loadedmetadata', () => setDuration(audio.duration || 0));
@@ -102,15 +105,25 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
     // WKWebView can overwrite MPNowPlayingInfoCenter when <audio> starts.
     // Re-push metadata (with artwork) after playback actually begins.
+    const timers: number[] = [];
     const republishArtwork = () => {
       if (Capacitor.getPlatform() !== 'ios') return;
       void syncMediaMetadata(track).then(() => syncPlaybackState(true, true));
+      timers.push(
+        window.setTimeout(() => {
+          void syncMediaMetadata(track).then(() => syncPlaybackState(true, true));
+        }, 400),
+        window.setTimeout(() => {
+          void syncMediaMetadata(track).then(() => syncPlaybackState(true, true));
+        }, 1200)
+      );
     };
     audio.addEventListener('playing', republishArtwork);
 
     audio.play().catch(() => undefined);
     return () => {
       audio.removeEventListener('playing', republishArtwork);
+      timers.forEach((id) => window.clearTimeout(id));
     };
   }, [current, getAudio]);
 

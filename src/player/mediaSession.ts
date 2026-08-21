@@ -8,6 +8,8 @@ import { NowPlaying, isIosNowPlaying } from './nowPlaying';
 const artworkCache = new Map<string, string>();
 const ART_SIZE = 320;
 
+const toPublicPath = (path: string): string => path.replace(/^\//, '');
+
 const bitmapToJpeg = (source: CanvasImageSource, sw: number, sh: number): string => {
   const canvas = document.createElement('canvas');
   canvas.width = ART_SIZE;
@@ -53,7 +55,7 @@ const fallbackArtwork = (album: string): string => {
 };
 
 const fetchCoverBlob = async (path: string): Promise<Blob | null> => {
-  const candidates = [Capacitor.convertFileSrc(path), path];
+  const candidates = [path, Capacitor.convertFileSrc(path)];
   for (const url of candidates) {
     try {
       const res = await fetch(url);
@@ -120,6 +122,14 @@ export const resolveArtwork = async (track: Track): Promise<string> => {
 const toBase64Payload = (dataUrl: string): string =>
   dataUrl.replace(/^data:image\/\w+;base64,/, '');
 
+const absoluteCoverUrl = (cover: string): string => {
+  try {
+    return new URL(cover, window.location.href).href;
+  } catch {
+    return cover;
+  }
+};
+
 export const syncMediaMetadata = async (
   track: Track | null,
   isCancelled?: () => boolean
@@ -133,18 +143,32 @@ export const syncMediaMetadata = async (
     return;
   }
 
-  const dataUrl = await resolveArtwork(track);
+  const cover = coverFor(track);
   if (isCancelled?.()) return;
 
   if (isIosNowPlaying()) {
+    // Prefer native bundle path — avoids large base64 over the Capacitor bridge.
+    // Only generate canvas/base64 when there is no cover file (e.g. 4x4).
+    let artworkBase64: string | undefined;
+    if (!cover) {
+      const dataUrl = await resolveArtwork(track);
+      if (isCancelled?.()) return;
+      artworkBase64 = toBase64Payload(dataUrl);
+    }
+
     await NowPlaying.setMetadata({
       title: track.title,
       artist: '2hollis',
       album: track.album,
-      artworkBase64: toBase64Payload(dataUrl),
+      artworkPath: cover ? toPublicPath(cover) : undefined,
+      artworkSrc: cover ? absoluteCoverUrl(cover) : undefined,
+      artworkBase64,
     }).catch(() => undefined);
     return;
   }
+
+  const dataUrl = await resolveArtwork(track);
+  if (isCancelled?.()) return;
 
   await NativeMediaSession.setMetadata({
     title: track.title,

@@ -6,6 +6,8 @@ export interface NowPlayingPlugin {
     title: string;
     artist: string;
     album: string;
+    /** Relative path under Capacitor public/, e.g. assets/covers/boy.jpg */
+    artworkPath?: string;
     artworkBase64?: string;
     artworkSrc?: string;
   }): Promise<void>;

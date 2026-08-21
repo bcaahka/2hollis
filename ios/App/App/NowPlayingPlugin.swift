@@ -16,6 +16,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     ]
 
     private var info: [String: Any] = [:]
+    private var republishWorkItem: DispatchWorkItem?
 
     override public func load() {
         UIApplication.shared.beginReceivingRemoteControlEvents()
@@ -24,34 +25,46 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func setMetadata(_ call: CAPPluginCall) {
-        DispatchQueue.main.async {
-            if let title = call.getString("title") {
-                self.info[MPMediaItemPropertyTitle] = title
-            }
-            if let artist = call.getString("artist") {
-                self.info[MPMediaItemPropertyArtist] = artist
-            }
-            if let album = call.getString("album") {
-                self.info[MPMediaItemPropertyAlbumTitle] = album
-            }
+        let title = call.getString("title")
+        let artist = call.getString("artist")
+        let album = call.getString("album")
+        let artworkPath = call.getString("artworkPath")
+        let artworkBase64 = call.getString("artworkBase64")
+        let artworkSrc = call.getString("artworkSrc")
 
-            if let artworkBase64 = call.getString("artworkBase64"),
-               let data = Data(base64Encoded: artworkBase64, options: .ignoreUnknownCharacters),
-               let image = UIImage(data: data) {
-                self.info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-            } else if let src = call.getString("artworkSrc") {
-                self.loadImage(from: src) { image in
-                    if let image = image {
-                        self.info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                    }
-                    self.publish()
-                    call.resolve()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let image = self.resolveArtwork(
+                path: artworkPath,
+                base64: artworkBase64,
+                src: artworkSrc
+            )
+
+            DispatchQueue.main.async {
+                if let title = title {
+                    self.info[MPMediaItemPropertyTitle] = title
                 }
-                return
-            }
+                if let artist = artist {
+                    self.info[MPMediaItemPropertyArtist] = artist
+                }
+                if let album = album {
+                    self.info[MPMediaItemPropertyAlbumTitle] = album
+                }
 
-            self.publish()
-            call.resolve()
+                self.info[MPNowPlayingInfoPropertyMediaType] =
+                    NSNumber(value: MPNowPlayingInfoMediaType.audio.rawValue)
+
+                if let image = image {
+                    let size = CGSize(
+                        width: max(image.size.width, 600),
+                        height: max(image.size.height, 600)
+                    )
+                    self.info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: size) { _ in image }
+                }
+
+                self.publish()
+                self.scheduleRepublish()
+                call.resolve()
+            }
         }
     }
 
@@ -61,6 +74,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
             switch state {
             case "playing":
                 self.info[MPNowPlayingInfoPropertyPlaybackRate] = 1.0
+                self.scheduleRepublish()
             case "paused":
                 self.info[MPNowPlayingInfoPropertyPlaybackRate] = 0.0
             default:
@@ -92,6 +106,8 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func clear(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
+            self.republishWorkItem?.cancel()
+            self.republishWorkItem = nil
             self.info.removeAll()
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             call.resolve()
@@ -100,6 +116,21 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func publish() {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    /// WKWebView HTMLAudio often overwrites Now Playing right after play — push again.
+    private func scheduleRepublish() {
+        republishWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, !self.info.isEmpty else { return }
+            self.publish()
+        }
+        republishWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self = self, !self.info.isEmpty else { return }
+            self.publish()
+        }
     }
 
     private func activateAudioSession() {
@@ -152,30 +183,73 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
-    private func loadImage(from src: String, completion: @escaping (UIImage?) -> Void) {
+    private func resolveArtwork(path: String?, base64: String?, src: String?) -> UIImage? {
+        if let path = path, let image = imageFromPublicPath(path) {
+            return image
+        }
+        if let base64 = base64, !base64.isEmpty,
+           let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters),
+           let image = UIImage(data: data) {
+            return image
+        }
+        if let src = src, let image = loadImageSync(from: src) {
+            return image
+        }
+        return nil
+    }
+
+    /// Covers are shipped in the Capacitor `public/` folder inside the app bundle.
+    private func imageFromPublicPath(_ path: String) -> UIImage? {
+        let cleaned = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let roots: [URL] = [
+            Bundle.main.bundleURL.appendingPathComponent("public"),
+            Bundle.main.resourceURL?.appendingPathComponent("public"),
+            Bundle.main.bundleURL
+        ].compactMap { $0 }
+
+        for root in roots {
+            let url = root.appendingPathComponent(cleaned)
+            if let image = UIImage(contentsOfFile: url.path) {
+                return image
+            }
+        }
+
+        // Try URL-decoding in case JS sent an encoded path.
+        if let decoded = cleaned.removingPercentEncoding, decoded != cleaned {
+            for root in roots {
+                let url = root.appendingPathComponent(decoded)
+                if let image = UIImage(contentsOfFile: url.path) {
+                    return image
+                }
+            }
+        }
+        return nil
+    }
+
+    private func loadImageSync(from src: String) -> UIImage? {
         if src.hasPrefix("data:"),
            let range = src.range(of: "base64,"),
            let data = Data(base64Encoded: String(src[range.upperBound...]), options: .ignoreUnknownCharacters),
            let image = UIImage(data: data) {
-            completion(image)
-            return
+            return image
         }
 
-        guard let url = URL(string: src) else {
-            completion(nil)
-            return
-        }
+        guard let url = URL(string: src) else { return nil }
 
         if url.isFileURL {
-            completion(UIImage(contentsOfFile: url.path))
-            return
+            return UIImage(contentsOfFile: url.path)
         }
 
+        // Capacitor local server / remote URL — short sync wait for Now Playing.
+        let semaphore = DispatchSemaphore(value: 0)
+        var image: UIImage?
         URLSession.shared.dataTask(with: url) { data, _, _ in
-            let image = data.flatMap { UIImage(data: $0) }
-            DispatchQueue.main.async {
-                completion(image)
+            if let data = data {
+                image = UIImage(data: data)
             }
+            semaphore.signal()
         }.resume()
+        _ = semaphore.wait(timeout: .now() + 2.5)
+        return image
     }
 }

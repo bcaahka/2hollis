@@ -154,7 +154,7 @@ export const ALBUMS: Album[] = [
       makeTrack('singles', 'Singles', 2023, 1, 'jeans', '/assets/covers/jeans.jpg'),
       makeTrack('singles', 'Singles', 2024, 2, 'gold', '/assets/covers/gold.jpg'),
       makeTrack('singles', 'Singles', 2023, 3, 'whiplash', '/assets/covers/whiplash.jpg'),
-      makeTrack('singles', 'Singles', 2023, 4, 'cliche', '/assets/covers/whiplash.jpg'),
+      makeTrack('singles', 'Singles', 2023, 4, 'CLICHE', '/assets/covers/whiplash.jpg'),
       makeTrack('singles', 'Singles', 2023, 5, '4x4'),
     ],
   },
