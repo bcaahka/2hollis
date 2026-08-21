@@ -1,9 +1,9 @@
 import { Capacitor } from '@capacitor/core';
 import type { PluginListenerHandle } from '@capacitor/core';
-import { Directory, Filesystem } from '@capacitor/filesystem';
 import { coverFor } from '../data/songs';
 import type { Track } from '../data/songs';
 import { NativeMediaSession } from './capMediaSession';
+import { NowPlaying, isIosNowPlaying } from './nowPlaying';
 
 const artworkCache = new Map<string, string>();
 const ART_SIZE = 320;
@@ -117,67 +117,66 @@ export const resolveArtwork = async (track: Track): Promise<string> => {
   return fallbackArtwork(track.album);
 };
 
-/** iOS MPNowPlayingInfoCenter loads file:// artwork; data URLs are unreliable system-side. */
-const toIosArtworkFileUrl = async (dataUrl: string, trackId: string): Promise<string | undefined> => {
-  try {
-    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
-    const path = `now-playing-${trackId}.jpg`;
-    await Filesystem.writeFile({
-      path,
-      data: base64,
-      directory: Directory.Cache,
-    });
-    const { uri } = await Filesystem.getUri({
-      path,
-      directory: Directory.Cache,
-    });
-    return uri;
-  } catch {
-    return undefined;
-  }
-};
+const toBase64Payload = (dataUrl: string): string =>
+  dataUrl.replace(/^data:image\/\w+;base64,/, '');
 
 export const syncMediaMetadata = async (
   track: Track | null,
   isCancelled?: () => boolean
 ): Promise<void> => {
   if (!track) {
-    await NativeMediaSession.setPlaybackState({ playbackState: 'none' }).catch(() => undefined);
+    if (isIosNowPlaying()) {
+      await NowPlaying.clear().catch(() => undefined);
+    } else {
+      await NativeMediaSession.setPlaybackState({ playbackState: 'none' }).catch(() => undefined);
+    }
     return;
   }
 
   const dataUrl = await resolveArtwork(track);
   if (isCancelled?.()) return;
 
-  let artworkSrc = dataUrl;
-  if (Capacitor.getPlatform() === 'ios' && dataUrl.startsWith('data:')) {
-    artworkSrc = (await toIosArtworkFileUrl(dataUrl, track.id)) ?? dataUrl;
+  if (isIosNowPlaying()) {
+    await NowPlaying.setMetadata({
+      title: track.title,
+      artist: '2hollis',
+      album: track.album,
+      artworkBase64: toBase64Payload(dataUrl),
+    }).catch(() => undefined);
+    return;
   }
-  if (isCancelled?.()) return;
 
   await NativeMediaSession.setMetadata({
     title: track.title,
     artist: '2hollis',
     album: track.album,
-    artwork: artworkSrc
-      ? [{ src: artworkSrc, sizes: `${ART_SIZE}x${ART_SIZE}`, type: 'image/jpeg' }]
+    artwork: dataUrl
+      ? [{ src: dataUrl, sizes: `${ART_SIZE}x${ART_SIZE}`, type: 'image/jpeg' }]
       : undefined,
   }).catch(() => undefined);
 };
 
 export const syncPlaybackState = async (isPlaying: boolean, hasTrack: boolean): Promise<void> => {
-  await NativeMediaSession.setPlaybackState({
-    playbackState: !hasTrack ? 'none' : isPlaying ? 'playing' : 'paused',
-  }).catch(() => undefined);
+  const playbackState = !hasTrack ? 'none' : isPlaying ? 'playing' : 'paused';
+  if (isIosNowPlaying()) {
+    await NowPlaying.setPlaybackState({ playbackState }).catch(() => undefined);
+    return;
+  }
+  await NativeMediaSession.setPlaybackState({ playbackState }).catch(() => undefined);
 };
 
 export const syncPositionState = async (position: number, duration: number): Promise<void> => {
   if (!Number.isFinite(duration) || duration <= 0) return;
-  await NativeMediaSession.setPositionState({
+  const payload = {
     position: Math.max(0, Math.min(position, duration)),
     duration,
     playbackRate: 1,
-  }).catch(() => undefined);
+  };
+  if (isIosNowPlaying()) {
+    await NowPlaying.setPositionState(payload).catch(() => undefined);
+    return;
+  }
+  await NativeMediaSession.setPositionState(payload).catch(() => undefined);
 };
 
 export type MediaActionHandlers = {
@@ -202,20 +201,20 @@ export const registerMediaActionHandlers = async (handlers: MediaActionHandlers)
     else if (action === 'nexttrack') handlers.nexttrack();
   };
 
-  for (const action of ['play', 'pause', 'previoustrack', 'nexttrack', 'seekto'] as const) {
-    await NativeMediaSession.setActionHandler({ action }, (details) => {
-      run(details.action, details.seekTime);
-    }).catch(() => undefined);
-  }
-
-  // Native iOS Capgo plugin emits actions via listener (not the JS callback).
-  if (Capacitor.getPlatform() === 'ios') {
+  if (isIosNowPlaying()) {
     if (iosActionListener) {
       await iosActionListener.remove().catch(() => undefined);
       iosActionListener = null;
     }
-    iosActionListener = await NativeMediaSession.addListener('actionHandler', (data) => {
+    iosActionListener = await NowPlaying.addListener('action', (data) => {
       run(data.action, data.seekTime);
     });
+    return;
+  }
+
+  for (const action of ['play', 'pause', 'previoustrack', 'nexttrack', 'seekto'] as const) {
+    await NativeMediaSession.setActionHandler({ action }, (details) => {
+      run(details.action, details.seekTime);
+    }).catch(() => undefined);
   }
 };
