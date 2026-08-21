@@ -14,6 +14,8 @@
   --accent: #b91c1c; /* hsl 0 74% 42% */
   --line: #757575;
   --bar: #d9d9d9;
+  --press-bg: #ececec;
+  --press-fg: var(--fg-strong);
 
   --ion-background-color: var(--bg);
   --ion-background-color-rgb: 255, 255, 255;
@@ -35,6 +37,8 @@ body.ion-palette-dark {
   --accent: #b91c1c;
   --line: #384252; /* hsl 217 19% 27% */
   --bar: #384252;
+  --press-bg: #1a2333;
+  --press-fg: var(--fg-strong);
 
   --ion-background-color: var(--bg);
   --ion-background-color-rgb: 3, 7, 17;
@@ -49,6 +53,14 @@ html,
 body {
   background: var(--bg);
   color: var(--fg);
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+a,
+[role='button'] {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
 }
 
 ion-content {

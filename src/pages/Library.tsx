@@ -76,6 +76,15 @@ const Library: React.FC = () => {
           </section>
         ))}
 
+        <footer className="lib-footer">
+          <div className="lib-footer-line" />
+          <div className="lib-footer-brand">
+            <span>© 2026 2HOLLIS</span>
+            <Cross className="lib-footer-cross" thickness={30} />
+          </div>
+          <div className="lib-footer-sub">ARCHIVE · PERSONAL USE</div>
+        </footer>
+
         <div className="lib-spacer" />
       </IonContent>
       <MiniPlayer />

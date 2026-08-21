@@ -132,14 +132,30 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setProgress(time);
   }, []);
 
+  const volumeScrubbingRef = useRef(false);
+  const volumeTimerRef = useRef<number | null>(null);
+
   const setVolume = useCallback((v: number) => {
-    setVolumeState(v);
+    const clamped = Math.min(1, Math.max(0, v));
+    setVolumeState(clamped);
+    volumeRef.current = clamped;
+
     if (Capacitor.isNativePlatform()) {
-      Volume.setVolume({ volume: v }).catch(() => undefined);
+      if (volumeTimerRef.current) window.clearTimeout(volumeTimerRef.current);
+      volumeTimerRef.current = window.setTimeout(() => {
+        Volume.setVolume({ volume: volumeRef.current }).catch(() => undefined);
+      }, 40);
       return;
     }
     const audio = audioRef.current;
-    if (audio) audio.volume = v;
+    if (audio) audio.volume = clamped;
+  }, []);
+
+  const setVolumeScrubbing = useCallback((active: boolean) => {
+    volumeScrubbingRef.current = active;
+    if (!active && Capacitor.isNativePlatform()) {
+      Volume.setVolume({ volume: volumeRef.current }).catch(() => undefined);
+    }
   }, []);
 
   useEffect(() => {
@@ -153,7 +169,8 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       .catch(() => undefined);
     Volume.startWatching().catch(() => undefined);
     Volume.addListener('volumeChange', (event) => {
-      if (!cancelled) setVolumeState(event.volume);
+      if (cancelled || volumeScrubbingRef.current) return;
+      setVolumeState(event.volume);
     })
       .then((h) => {
         handle = h;
@@ -161,6 +178,7 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       .catch(() => undefined);
     return () => {
       cancelled = true;
+      if (volumeTimerRef.current) window.clearTimeout(volumeTimerRef.current);
       if (handle) handle.remove().catch(() => undefined);
       Volume.stopWatching().catch(() => undefined);
     };
@@ -186,13 +204,19 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     });
   }, [next, prev, seek]);
 
+  // Metadata first, then playback state — avoids empty artwork in the system UI.
   useEffect(() => {
-    void syncMediaMetadata(current);
-  }, [current]);
-
-  useEffect(() => {
-    void syncPlaybackState(isPlaying, Boolean(current));
-  }, [isPlaying, current]);
+    let cancelled = false;
+    const run = async () => {
+      await syncMediaMetadata(current, () => cancelled);
+      if (cancelled) return;
+      await syncPlaybackState(isPlaying, Boolean(current));
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [current, isPlaying]);
 
   const lastPositionSyncRef = useRef(0);
   useEffect(() => {
@@ -220,6 +244,7 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       prev,
       seek,
       setVolume,
+      setVolumeScrubbing,
       toggleShuffle,
       cycleRepeat,
     }),
@@ -237,6 +262,7 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       prev,
       seek,
       setVolume,
+      setVolumeScrubbing,
       toggleShuffle,
       cycleRepeat,
     ]

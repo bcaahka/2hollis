@@ -40,8 +40,8 @@
 }
 
 .lib-icon-btn:active {
-  background: var(--fg-strong);
-  color: var(--fg-invert);
+  background: var(--press-bg);
+  color: var(--press-fg);
 }
 
 .theme-cross {
@@ -103,8 +103,8 @@ body.ion-palette-dark .theme-cross {
 }
 
 .track:active {
-  background: var(--fg);
-  color: var(--bg);
+  background: var(--press-bg);
+  color: var(--press-fg);
 }
 
 .track-num {
@@ -184,4 +184,38 @@ body.ion-palette-dark .theme-cross {
 
 .lib-spacer {
   height: 120px;
+}
+
+.lib-footer {
+  padding: 40px 20px 8px;
+}
+
+.lib-footer-line {
+  height: 1px;
+  background: var(--line);
+  margin-bottom: 22px;
+}
+
+.lib-footer-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 300;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--fg-strong);
+}
+
+.lib-footer-cross {
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.lib-footer-sub {
+  margin-top: 10px;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--subtle);
 }

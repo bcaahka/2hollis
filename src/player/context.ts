@@ -17,6 +17,7 @@ export interface PlayerContextValue {
   prev: () => void;
   seek: (time: number) => void;
   setVolume: (volume: number) => void;
+  setVolumeScrubbing: (active: boolean) => void;
   toggleShuffle: () => void;
   cycleRepeat: () => void;
 }

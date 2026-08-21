@@ -35,8 +35,8 @@
 }
 
 .player-back:active {
-  background: var(--fg-strong);
-  color: var(--fg-invert);
+  background: var(--press-bg);
+  color: var(--press-fg);
 }
 
 .player-back.empty {
@@ -133,8 +133,8 @@
 }
 
 .ctrl:active {
-  background: var(--fg-strong);
-  color: var(--fg-invert);
+  background: var(--press-bg);
+  color: var(--press-fg);
 }
 
 .ctrl.accent {

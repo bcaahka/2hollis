@@ -37,6 +37,7 @@ const Player: React.FC = () => {
     prev,
     seek,
     setVolume,
+    setVolumeScrubbing,
     toggleShuffle,
     cycleRepeat,
   } = usePlayer();
@@ -139,9 +140,14 @@ const Player: React.FC = () => {
           <IonRange
             min={0}
             max={1}
-            step={0.01}
+            step={0.005}
             value={volume}
-            onIonChange={(e) => setVolume(e.detail.value as number)}
+            onIonInput={(e) => setVolume(e.detail.value as number)}
+            onIonKnobMoveStart={() => setVolumeScrubbing(true)}
+            onIonKnobMoveEnd={(e) => {
+              setVolume(e.detail.value as number);
+              setVolumeScrubbing(false);
+            }}
           />
         </div>
       </IonContent>
