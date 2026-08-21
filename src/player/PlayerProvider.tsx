@@ -95,10 +95,23 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   useEffect(() => {
     if (!current) return;
     const audio = getAudio();
-    audio.src = current.file;
+    const track = current;
+    audio.src = track.file;
     setProgress(0);
     setDuration(0);
+
+    // WKWebView can overwrite MPNowPlayingInfoCenter when <audio> starts.
+    // Re-push metadata (with artwork) after playback actually begins.
+    const republishArtwork = () => {
+      if (Capacitor.getPlatform() !== 'ios') return;
+      void syncMediaMetadata(track).then(() => syncPlaybackState(true, true));
+    };
+    audio.addEventListener('playing', republishArtwork);
+
     audio.play().catch(() => undefined);
+    return () => {
+      audio.removeEventListener('playing', republishArtwork);
+    };
   }, [current, getAudio]);
 
   const playTrack = useCallback(
