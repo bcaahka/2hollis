@@ -25,10 +25,11 @@ export const readVolumeSliderColors = (): Pick<
   SystemVolumeSliderFrame,
   'activeColor' | 'trackColor' | 'thumbColor'
 > => {
-  const styles = getComputedStyle(document.documentElement);
+  // Read from body — dark palette overrides live on body, not :root/html.
+  const styles = getComputedStyle(document.body);
   const read = (name: string, fallback: string) => {
     const value = styles.getPropertyValue(name).trim();
-    return value || fallback;
+    return value.startsWith('#') && value.length >= 7 ? value.slice(0, 7) : fallback;
   };
   return {
     activeColor: read('--accent', '#b91c1c'),

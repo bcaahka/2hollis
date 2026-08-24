@@ -76,7 +76,15 @@ export const useNativeSystemVolumeSlider = (
     window.visualViewport?.addEventListener('scroll', schedule);
     document.addEventListener('scroll', schedule, true);
 
-    const themeObserver = new MutationObserver(schedule);
+    // Theme class changes need a full remount so native thumb colors refresh.
+    const themeObserver = new MutationObserver(() => {
+      mountedRef.current = false;
+      SystemVolumeSlider.unmount()
+        .catch(() => undefined)
+        .finally(() => {
+          if (!cancelled) schedule();
+        });
+    });
     themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
     return () => {

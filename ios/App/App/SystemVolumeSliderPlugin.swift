@@ -16,6 +16,7 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
     ]
 
     private var volumeView: MPVolumeView?
+    private var didStyle = false
 
     @objc func mount(_ call: CAPPluginCall) {
         apply(call, createIfNeeded: true)
@@ -29,6 +30,7 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
         DispatchQueue.main.async {
             self.volumeView?.removeFromSuperview()
             self.volumeView = nil
+            self.didStyle = false
             call.resolve()
         }
     }
@@ -56,18 +58,20 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
             }
 
             let frame = CGRect(x: x, y: y, width: width, height: height)
+            let created: Bool
             let view: MPVolumeView
             if let existing = self.volumeView {
                 view = existing
+                created = false
             } else if createIfNeeded {
                 view = MPVolumeView(frame: frame)
                 view.showsVolumeSlider = true
                 view.backgroundColor = .clear
                 view.isOpaque = false
-                // Hide AirPlay / route button — volume only.
                 view.showsRouteButton = false
                 webView.addSubview(view)
                 self.volumeView = view
+                created = true
             } else {
                 call.resolve()
                 return
@@ -75,13 +79,17 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
 
             view.frame = frame
             view.isHidden = false
-            let active = self.color(from: activeHex) ?? UIColor.label
-            let track = self.color(from: trackHex) ?? UIColor.tertiaryLabel
-            let thumb = self.color(from: thumbHex) ?? UIColor.label
-            self.styleSlider(in: view, active: active, track: track, thumb: thumb)
-            // Slider subview can appear a tick later after first layout.
-            DispatchQueue.main.async {
+
+            // Restyling every frame breaks MPVolumeView visuals — only once (and on theme remount).
+            if created || !self.didStyle {
+                let active = self.color(from: activeHex) ?? UIColor.label
+                let track = self.color(from: trackHex) ?? UIColor.tertiaryLabel
+                let thumb = self.color(from: thumbHex) ?? UIColor.label
                 self.styleSlider(in: view, active: active, track: track, thumb: thumb)
+                DispatchQueue.main.async {
+                    self.styleSlider(in: view, active: active, track: track, thumb: thumb)
+                    self.didStyle = true
+                }
             }
             call.resolve()
         }
@@ -91,7 +99,7 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
         guard let slider = Self.findSlider(in: volumeView) else { return }
         slider.minimumTrackTintColor = active
         slider.maximumTrackTintColor = track
-        let thumbImage = Self.makeThumb(color: thumb, diameter: 12)
+        let thumbImage = Self.makeThumb(color: thumb, diameter: 14)
         slider.setThumbImage(thumbImage, for: .normal)
         slider.setThumbImage(thumbImage, for: .highlighted)
     }
@@ -110,7 +118,7 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
         return renderer.image { _ in
             color.setFill()
             UIBezierPath(ovalIn: CGRect(origin: .zero, size: size)).fill()
-        }
+        }.withRenderingMode(.alwaysOriginal)
     }
 
     private func color(from hex: String?) -> UIColor? {
