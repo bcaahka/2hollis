@@ -148,26 +148,33 @@ const Player: React.FC = () => {
 
         <div className="player-volume">
           <IonIcon icon={volumeHigh} className="vol-icon" />
-          {nativeSystemVolume ? (
-            <div
-              ref={volumeSlotRef}
-              className="player-volume-slot"
-              aria-label="Volume"
-            />
-          ) : (
+          <div
+            ref={volumeSlotRef}
+            className={`player-volume-slot${nativeSystemVolume ? ' native-hit' : ''}`}
+          >
             <IonRange
               min={0}
               max={1}
               step={0.005}
               value={volume}
-              onIonInput={(e) => setVolume(e.detail.value as number)}
-              onIonKnobMoveStart={() => setVolumeScrubbing(true)}
-              onIonKnobMoveEnd={(e) => {
-                setVolume(e.detail.value as number);
-                setVolumeScrubbing(false);
-              }}
+              onIonInput={
+                nativeSystemVolume
+                  ? undefined
+                  : (e) => setVolume(e.detail.value as number)
+              }
+              onIonKnobMoveStart={
+                nativeSystemVolume ? undefined : () => setVolumeScrubbing(true)
+              }
+              onIonKnobMoveEnd={
+                nativeSystemVolume
+                  ? undefined
+                  : (e) => {
+                      setVolume(e.detail.value as number);
+                      setVolumeScrubbing(false);
+                    }
+              }
             />
-          )}
+          </div>
         </div>
       </IonContent>
     </IonPage>

@@ -187,9 +187,19 @@
 
 .player-volume-slot {
   flex: 1;
-  height: 31px;
   min-width: 0;
-  align-self: center;
+  display: flex;
+  align-items: center;
+}
+
+.player-volume-slot.native-hit {
+  /* Touches go to the transparent native MPVolumeView above; keep red IonRange visible. */
+  pointer-events: none;
+}
+
+.player-volume-slot ion-range {
+  width: 100%;
+  padding-inline: 0;
 }
 
 .player-empty {

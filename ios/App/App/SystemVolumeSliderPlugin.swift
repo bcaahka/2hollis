@@ -3,14 +3,10 @@ import UIKit
 import Capacitor
 import MediaPlayer
 
-/// MPVolumeView that gives the volume slider the full frame (no route-button gap)
-/// and vertically centers the track so it lines up with the web volume icon.
+/// Full-bleed volume slider; route button rect is zeroed out.
 private final class FullWidthVolumeView: MPVolumeView {
     override func volumeSliderRect(forBounds bounds: CGRect) -> CGRect {
-        // UISlider intrinsic track height ~31pt — center inside the web slot.
-        let trackHeight: CGFloat = 31
-        let y = bounds.midY - trackHeight / 2
-        return CGRect(x: bounds.minX, y: y, width: bounds.width, height: trackHeight)
+        bounds
     }
 
     override func routeButtonRect(forBounds bounds: CGRect) -> CGRect {
@@ -18,8 +14,8 @@ private final class FullWidthVolumeView: MPVolumeView {
     }
 }
 
-/// Overlays a native `MPVolumeView` on the web slot so system volume scrubbing
-/// is handled entirely on the UIKit thread (no Capacitor bridge lag).
+/// Invisible native system-volume hit target over the web IonRange.
+/// Visuals stay in the web layer (red / small knob); this view only handles touches.
 @objc(SystemVolumeSliderPlugin)
 public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "SystemVolumeSliderPlugin"
@@ -31,7 +27,7 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
     ]
 
     private var volumeView: FullWidthVolumeView?
-    private var didStyle = false
+    private var styleTimer: Timer?
 
     @objc func mount(_ call: CAPPluginCall) {
         apply(call, createIfNeeded: true)
@@ -43,9 +39,10 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func unmount(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
+            self.styleTimer?.invalidate()
+            self.styleTimer = nil
             self.volumeView?.removeFromSuperview()
             self.volumeView = nil
-            self.didStyle = false
             call.resolve()
         }
     }
@@ -55,10 +52,6 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
         let y = CGFloat(call.getDouble("y") ?? 0)
         let width = CGFloat(call.getDouble("width") ?? 0)
         let height = CGFloat(call.getDouble("height") ?? 0)
-        let visible = call.getBool("visible") ?? true
-        let activeHex = call.getString("activeColor")
-        let trackHex = call.getString("trackColor")
-        let thumbHex = call.getString("thumbColor")
 
         DispatchQueue.main.async {
             guard
@@ -69,31 +62,29 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
                 return
             }
 
-            if width < 1 || height < 1 || !visible {
-                self.volumeView?.isHidden = true
+            // Keep last good frame — never hide on transient bad rects (was causing
+            // the slider to vanish while the speaker icon stayed).
+            guard width >= 8, height >= 8 else {
                 call.resolve()
                 return
             }
 
-            // getBoundingClientRect is in webView bounds space → convert to host
-            // so safe-area / webView origin can't push the slider above the icon.
             let rectInWeb = CGRect(x: x, y: y, width: width, height: height)
             let frame = webView.convert(rectInWeb, to: host)
 
-            let created: Bool
             let view: FullWidthVolumeView
             if let existing = self.volumeView {
                 view = existing
-                created = false
             } else if createIfNeeded {
                 view = FullWidthVolumeView(frame: frame)
                 view.showsVolumeSlider = true
+                view.showsRouteButton = false
                 view.backgroundColor = .clear
                 view.isOpaque = false
-                view.showsRouteButton = false
+                view.alpha = 0.02 // nearly invisible, still receives touches
                 host.addSubview(view)
                 self.volumeView = view
-                created = true
+                self.startStyleWatch(view)
             } else {
                 call.resolve()
                 return
@@ -108,34 +99,39 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
             view.isHidden = false
             view.setNeedsLayout()
             view.layoutIfNeeded()
-
-            if created || !self.didStyle {
-                let active = self.color(from: activeHex) ?? UIColor.label
-                let track = self.color(from: trackHex) ?? UIColor.tertiaryLabel
-                let thumb = self.color(from: thumbHex) ?? UIColor.label
-                self.styleSlider(in: view, active: active, track: track, thumb: thumb)
-                // Slider subview appears after first layout pass.
-                DispatchQueue.main.async {
-                    self.styleSlider(in: view, active: active, track: track, thumb: thumb)
-                    self.didStyle = true
-                }
-            }
+            self.makeTransparent(view)
             call.resolve()
         }
     }
 
-    private func styleSlider(in volumeView: MPVolumeView, active: UIColor, track: UIColor, thumb: UIColor) {
+    /// iOS periodically resets MPVolumeView chrome — re-clear on a timer.
+    private func startStyleWatch(_ view: FullWidthVolumeView) {
+        styleTimer?.invalidate()
+        makeTransparent(view)
+        styleTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self, weak view] _ in
+            guard let self, let view else { return }
+            self.makeTransparent(view)
+        }
+        if let styleTimer {
+            RunLoop.main.add(styleTimer, forMode: .common)
+        }
+    }
+
+    private func makeTransparent(_ volumeView: MPVolumeView) {
         guard let slider = Self.findSlider(in: volumeView) else { return }
 
-        // Tint alone is unreliable on recent iOS — use stretchable track images.
-        slider.setMinimumTrackImage(Self.trackImage(color: active), for: .normal)
-        slider.setMaximumTrackImage(Self.trackImage(color: track), for: .normal)
-        slider.minimumTrackTintColor = nil
-        slider.maximumTrackTintColor = nil
+        let clearTrack = Self.clearImage(size: CGSize(width: 4, height: 2))
+            .resizableImage(withCapInsets: UIEdgeInsets(top: 0, left: 1, bottom: 0, right: 1),
+                            resizingMode: .stretch)
+        let clearThumb = Self.clearImage(size: CGSize(width: 28, height: 28))
 
-        let thumbImage = Self.makeThumb(color: thumb, diameter: 14)
-        slider.setThumbImage(thumbImage, for: .normal)
-        slider.setThumbImage(thumbImage, for: .highlighted)
+        slider.setMinimumTrackImage(clearTrack, for: .normal)
+        slider.setMaximumTrackImage(clearTrack, for: .normal)
+        slider.setThumbImage(clearThumb, for: .normal)
+        slider.setThumbImage(clearThumb, for: .highlighted)
+        slider.minimumTrackTintColor = .clear
+        slider.maximumTrackTintColor = .clear
+        slider.thumbTintColor = .clear
     }
 
     private static func findSlider(in root: UIView) -> UISlider? {
@@ -146,39 +142,7 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
         return nil
     }
 
-    private static func trackImage(color: UIColor) -> UIImage {
-        let size = CGSize(width: 4, height: 2)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        let image = renderer.image { _ in
-            color.setFill()
-            UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 1).fill()
-        }
-        return image
-            .resizableImage(withCapInsets: UIEdgeInsets(top: 0, left: 2, bottom: 0, right: 2),
-                            resizingMode: .stretch)
-            .withRenderingMode(.alwaysOriginal)
-    }
-
-    private static func makeThumb(color: UIColor, diameter: CGFloat) -> UIImage {
-        let size = CGSize(width: diameter, height: diameter)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        return renderer.image { _ in
-            color.setFill()
-            UIBezierPath(ovalIn: CGRect(origin: .zero, size: size)).fill()
-        }.withRenderingMode(.alwaysOriginal)
-    }
-
-    private func color(from hex: String?) -> UIColor? {
-        guard var raw = hex?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
-            return nil
-        }
-        if raw.hasPrefix("#") { raw.removeFirst() }
-        guard raw.count == 6, let value = UInt64(raw, radix: 16) else { return nil }
-        return UIColor(
-            red: CGFloat((value >> 16) & 0xff) / 255,
-            green: CGFloat((value >> 8) & 0xff) / 255,
-            blue: CGFloat(value & 0xff) / 255,
-            alpha: 1
-        )
+    private static func clearImage(size: CGSize) -> UIImage {
+        UIGraphicsImageRenderer(size: size).image { _ in }.withRenderingMode(.alwaysOriginal)
     }
 }

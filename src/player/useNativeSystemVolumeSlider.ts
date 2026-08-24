@@ -1,17 +1,16 @@
 import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
-import {
-  SystemVolumeSlider,
-  isIosSystemVolumeSlider,
-  readVolumeSliderColors,
-} from './systemVolumeSlider';
+import { SystemVolumeSlider, isIosSystemVolumeSlider } from './systemVolumeSlider';
 
 type NativeVolumeSliderApi = {
   active: boolean;
   sync: () => void;
 };
 
-/** Keeps a native MPVolumeView aligned with a web slot (iOS only). */
+/**
+ * Places an invisible native MPVolumeView over `slotRef` so system volume is
+ * smooth; the web IonRange underneath owns the red / small-knob visuals.
+ */
 export const useNativeSystemVolumeSlider = (
   slotRef: RefObject<HTMLElement | null>,
   enabled: boolean
@@ -32,21 +31,13 @@ export const useNativeSystemVolumeSlider = (
       if (!el) return;
 
       const rect = el.getBoundingClientRect();
-      const visible =
-        rect.width >= 1 &&
-        rect.height >= 1 &&
-        rect.bottom > 0 &&
-        rect.top < window.innerHeight &&
-        rect.right > 0 &&
-        rect.left < window.innerWidth;
+      if (rect.width < 8 || rect.height < 8) return;
 
       const payload = {
         x: rect.left,
         y: rect.top,
         width: rect.width,
         height: rect.height,
-        visible,
-        ...readVolumeSliderColors(),
       };
 
       const run = mountedRef.current
@@ -66,7 +57,11 @@ export const useNativeSystemVolumeSlider = (
     };
     scheduleRef.current = schedule;
 
+    // Layout may not be ready on first paint — retry a few times.
     schedule();
+    const boot = window.setTimeout(schedule, 50);
+    const boot2 = window.setTimeout(schedule, 200);
+    const boot3 = window.setTimeout(schedule, 500);
 
     const ro = new ResizeObserver(schedule);
     if (slotRef.current) ro.observe(slotRef.current);
@@ -76,27 +71,18 @@ export const useNativeSystemVolumeSlider = (
     window.visualViewport?.addEventListener('scroll', schedule);
     document.addEventListener('scroll', schedule, true);
 
-    // Theme class changes need a full remount so native thumb colors refresh.
-    const themeObserver = new MutationObserver(() => {
-      mountedRef.current = false;
-      SystemVolumeSlider.unmount()
-        .catch(() => undefined)
-        .finally(() => {
-          if (!cancelled) schedule();
-        });
-    });
-    themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
-
     return () => {
       cancelled = true;
       if (raf) cancelAnimationFrame(raf);
+      window.clearTimeout(boot);
+      window.clearTimeout(boot2);
+      window.clearTimeout(boot3);
       scheduleRef.current = () => undefined;
       ro.disconnect();
       window.removeEventListener('resize', schedule);
       window.visualViewport?.removeEventListener('resize', schedule);
       window.visualViewport?.removeEventListener('scroll', schedule);
       document.removeEventListener('scroll', schedule, true);
-      themeObserver.disconnect();
       mountedRef.current = false;
       SystemVolumeSlider.unmount().catch(() => undefined);
     };
