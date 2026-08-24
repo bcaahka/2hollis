@@ -187,8 +187,9 @@
 
 .player-volume-slot {
   flex: 1;
-  height: 42px;
+  height: 31px;
   min-width: 0;
+  align-self: center;
 }
 
 .player-empty {

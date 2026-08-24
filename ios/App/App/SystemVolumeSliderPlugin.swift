@@ -3,6 +3,21 @@ import UIKit
 import Capacitor
 import MediaPlayer
 
+/// MPVolumeView that gives the volume slider the full frame (no route-button gap)
+/// and vertically centers the track so it lines up with the web volume icon.
+private final class FullWidthVolumeView: MPVolumeView {
+    override func volumeSliderRect(forBounds bounds: CGRect) -> CGRect {
+        // UISlider intrinsic track height ~31pt — center inside the web slot.
+        let trackHeight: CGFloat = 31
+        let y = bounds.midY - trackHeight / 2
+        return CGRect(x: bounds.minX, y: y, width: bounds.width, height: trackHeight)
+    }
+
+    override func routeButtonRect(forBounds bounds: CGRect) -> CGRect {
+        .zero
+    }
+}
+
 /// Overlays a native `MPVolumeView` on the web slot so system volume scrubbing
 /// is handled entirely on the UIKit thread (no Capacitor bridge lag).
 @objc(SystemVolumeSliderPlugin)
@@ -15,7 +30,7 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "unmount", returnType: CAPPluginReturnPromise),
     ]
 
-    private var volumeView: MPVolumeView?
+    private var volumeView: FullWidthVolumeView?
     private var didStyle = false
 
     @objc func mount(_ call: CAPPluginCall) {
@@ -46,7 +61,10 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
         let thumbHex = call.getString("thumbColor")
 
         DispatchQueue.main.async {
-            guard let webView = self.bridge?.webView else {
+            guard
+                let webView = self.bridge?.webView,
+                let host = self.bridge?.viewController?.view
+            else {
                 call.reject("WebView unavailable")
                 return
             }
@@ -57,19 +75,23 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
                 return
             }
 
-            let frame = CGRect(x: x, y: y, width: width, height: height)
+            // getBoundingClientRect is in webView bounds space → convert to host
+            // so safe-area / webView origin can't push the slider above the icon.
+            let rectInWeb = CGRect(x: x, y: y, width: width, height: height)
+            let frame = webView.convert(rectInWeb, to: host)
+
             let created: Bool
-            let view: MPVolumeView
+            let view: FullWidthVolumeView
             if let existing = self.volumeView {
                 view = existing
                 created = false
             } else if createIfNeeded {
-                view = MPVolumeView(frame: frame)
+                view = FullWidthVolumeView(frame: frame)
                 view.showsVolumeSlider = true
                 view.backgroundColor = .clear
                 view.isOpaque = false
                 view.showsRouteButton = false
-                webView.addSubview(view)
+                host.addSubview(view)
                 self.volumeView = view
                 created = true
             } else {
@@ -77,15 +99,22 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
                 return
             }
 
+            if view.superview !== host {
+                view.removeFromSuperview()
+                host.addSubview(view)
+            }
+
             view.frame = frame
             view.isHidden = false
+            view.setNeedsLayout()
+            view.layoutIfNeeded()
 
-            // Restyling every frame breaks MPVolumeView visuals — only once (and on theme remount).
             if created || !self.didStyle {
                 let active = self.color(from: activeHex) ?? UIColor.label
                 let track = self.color(from: trackHex) ?? UIColor.tertiaryLabel
                 let thumb = self.color(from: thumbHex) ?? UIColor.label
                 self.styleSlider(in: view, active: active, track: track, thumb: thumb)
+                // Slider subview appears after first layout pass.
                 DispatchQueue.main.async {
                     self.styleSlider(in: view, active: active, track: track, thumb: thumb)
                     self.didStyle = true
@@ -97,8 +126,13 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func styleSlider(in volumeView: MPVolumeView, active: UIColor, track: UIColor, thumb: UIColor) {
         guard let slider = Self.findSlider(in: volumeView) else { return }
-        slider.minimumTrackTintColor = active
-        slider.maximumTrackTintColor = track
+
+        // Tint alone is unreliable on recent iOS — use stretchable track images.
+        slider.setMinimumTrackImage(Self.trackImage(color: active), for: .normal)
+        slider.setMaximumTrackImage(Self.trackImage(color: track), for: .normal)
+        slider.minimumTrackTintColor = nil
+        slider.maximumTrackTintColor = nil
+
         let thumbImage = Self.makeThumb(color: thumb, diameter: 14)
         slider.setThumbImage(thumbImage, for: .normal)
         slider.setThumbImage(thumbImage, for: .highlighted)
@@ -110,6 +144,19 @@ public class SystemVolumeSliderPlugin: CAPPlugin, CAPBridgedPlugin {
             if let slider = findSlider(in: child) { return slider }
         }
         return nil
+    }
+
+    private static func trackImage(color: UIColor) -> UIImage {
+        let size = CGSize(width: 4, height: 2)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { _ in
+            color.setFill()
+            UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 1).fill()
+        }
+        return image
+            .resizableImage(withCapInsets: UIEdgeInsets(top: 0, left: 2, bottom: 0, right: 2),
+                            resizingMode: .stretch)
+            .withRenderingMode(.alwaysOriginal)
     }
 
     private static func makeThumb(color: UIColor, diameter: CGFloat) -> UIImage {
