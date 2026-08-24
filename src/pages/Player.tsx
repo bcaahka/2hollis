@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { IonContent, IonIcon, IonPage, IonRange } from '@ionic/react';
 import {
   chevronBack,
@@ -14,6 +15,7 @@ import Cover from '../components/Cover';
 import Cross from '../components/Cross';
 import { coverFor } from '../data/songs';
 import { usePlayer } from '../player/context';
+import { useNativeSystemVolumeSlider } from '../player/useNativeSystemVolumeSlider';
 import './Player.css';
 
 const fmt = (s: number): string => {
@@ -42,6 +44,11 @@ const Player: React.FC = () => {
     cycleRepeat,
   } = usePlayer();
   const navigate = useNavigate();
+  const volumeSlotRef = useRef<HTMLDivElement>(null);
+  const { active: nativeSystemVolume, sync: syncNativeVolume } = useNativeSystemVolumeSlider(
+    volumeSlotRef,
+    Boolean(current)
+  );
 
   if (!current) {
     return (
@@ -64,7 +71,11 @@ const Player: React.FC = () => {
   return (
     <IonPage className="player-page">
       <Cross className="player-bg-cross" />
-      <IonContent fullscreen>
+      <IonContent
+        fullscreen
+        scrollEvents={nativeSystemVolume}
+        onIonScroll={nativeSystemVolume ? () => syncNativeVolume() : undefined}
+      >
         <div className="player-top">
           <button type="button" className="player-back" onClick={() => navigate('/')}>
             <IonIcon icon={chevronBack} />
@@ -137,18 +148,26 @@ const Player: React.FC = () => {
 
         <div className="player-volume">
           <IonIcon icon={volumeHigh} className="vol-icon" />
-          <IonRange
-            min={0}
-            max={1}
-            step={0.005}
-            value={volume}
-            onIonInput={(e) => setVolume(e.detail.value as number)}
-            onIonKnobMoveStart={() => setVolumeScrubbing(true)}
-            onIonKnobMoveEnd={(e) => {
-              setVolume(e.detail.value as number);
-              setVolumeScrubbing(false);
-            }}
-          />
+          {nativeSystemVolume ? (
+            <div
+              ref={volumeSlotRef}
+              className="player-volume-slot"
+              aria-label="Volume"
+            />
+          ) : (
+            <IonRange
+              min={0}
+              max={1}
+              step={0.005}
+              value={volume}
+              onIonInput={(e) => setVolume(e.detail.value as number)}
+              onIonKnobMoveStart={() => setVolumeScrubbing(true)}
+              onIonKnobMoveEnd={(e) => {
+                setVolume(e.detail.value as number);
+                setVolumeScrubbing(false);
+              }}
+            />
+          )}
         </div>
       </IonContent>
     </IonPage>

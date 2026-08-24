@@ -6,5 +6,6 @@ class MainViewController: CAPBridgeViewController {
     override open func capacitorDidLoad() {
         // Instance registration is required for app-local Swift plugins.
         bridge?.registerPluginInstance(NowPlayingPlugin())
+        bridge?.registerPluginInstance(SystemVolumeSliderPlugin())
     }
 }

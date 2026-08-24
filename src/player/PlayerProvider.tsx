@@ -258,7 +258,7 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   );
 
   const volumeScrubbingRef = useRef(false);
-  const volumeTimerRef = useRef<number | null>(null);
+  const volumeRafRef = useRef<number | null>(null);
 
   const setVolume = useCallback((v: number) => {
     const clamped = Math.min(1, Math.max(0, v));
@@ -266,10 +266,12 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     volumeRef.current = clamped;
 
     if (Capacitor.isNativePlatform()) {
-      if (volumeTimerRef.current) window.clearTimeout(volumeTimerRef.current);
-      volumeTimerRef.current = window.setTimeout(() => {
+      // Coalesce to one native call per frame — avoids bridge backlog lag.
+      if (volumeRafRef.current != null) return;
+      volumeRafRef.current = window.requestAnimationFrame(() => {
+        volumeRafRef.current = null;
         Volume.setVolume({ volume: volumeRef.current }).catch(() => undefined);
-      }, 40);
+      });
       return;
     }
     const audio = audioRef.current;
@@ -279,6 +281,10 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const setVolumeScrubbing = useCallback((active: boolean) => {
     volumeScrubbingRef.current = active;
     if (!active && Capacitor.isNativePlatform()) {
+      if (volumeRafRef.current != null) {
+        window.cancelAnimationFrame(volumeRafRef.current);
+        volumeRafRef.current = null;
+      }
       Volume.setVolume({ volume: volumeRef.current }).catch(() => undefined);
     }
   }, []);
@@ -303,7 +309,10 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       .catch(() => undefined);
     return () => {
       cancelled = true;
-      if (volumeTimerRef.current) window.clearTimeout(volumeTimerRef.current);
+      if (volumeRafRef.current != null) {
+        window.cancelAnimationFrame(volumeRafRef.current);
+        volumeRafRef.current = null;
+      }
       if (handle) handle.remove().catch(() => undefined);
       Volume.stopWatching().catch(() => undefined);
     };
