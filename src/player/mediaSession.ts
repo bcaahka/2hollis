@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 import type { PluginListenerHandle } from '@capacitor/core';
-import { coverFor } from '../data/songs';
+import { coverFor } from '../data/catalogApi';
 import type { Track } from '../data/songs';
 import { NativeMediaSession } from './capMediaSession';
 import { NowPlaying, isIosNowPlaying } from './nowPlaying';

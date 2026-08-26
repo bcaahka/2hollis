@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react';
 import type { Track } from '../data/songs';
+import type { EqGains, EqPresetId } from './eq';
 
 export type RepeatMode = 'off' | 'all' | 'one';
 
@@ -20,6 +21,9 @@ export interface PlayerContextValue {
   setVolumeScrubbing: (active: boolean) => void;
   toggleShuffle: () => void;
   cycleRepeat: () => void;
+  eqGains: EqGains;
+  setEqGain: (index: number, value: number) => void;
+  setEqPreset: (id: EqPresetId) => void;
 }
 
 export const PlayerContext = createContext<PlayerContextValue | null>(null);

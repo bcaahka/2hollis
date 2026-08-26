@@ -7,6 +7,7 @@ export interface Track {
   number: number;
   file: string;
   cover?: string;
+  hasLyrics?: boolean;
 }
 
 export interface Album {

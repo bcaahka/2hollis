@@ -1,5 +1,5 @@
-import { useRef } from 'react';
-import { IonContent, IonIcon, IonPage, IonRange } from '@ionic/react';
+import { useEffect, useRef, useState } from 'react';
+import { IonContent, IonFooter, IonIcon, IonPage, IonRange } from '@ionic/react';
 import {
   chevronBack,
   pause,
@@ -13,7 +13,19 @@ import {
 import { useNavigate } from 'react-router-dom';
 import Cover from '../components/Cover';
 import Cross from '../components/Cross';
-import { coverFor } from '../data/songs';
+import { EqIcon, LyricsIcon } from '../components/DockIcons';
+import { useCatalog } from '../data/catalogContext';
+import { fetchLyrics } from '../data/catalogApi';
+import { lyricsFor, parseLyrics } from '../data/lyrics';
+import {
+  EQ_LABELS,
+  EQ_MAX,
+  EQ_MIN,
+  EQ_PRESET_LABELS,
+  presetForGains,
+} from '../player/eq';
+import type { EqPresetId } from '../player/eq';
+import { useOffline } from '../player/offlineContext';
 import { usePlayer } from '../player/context';
 import { useNativeSystemVolumeSlider } from '../player/useNativeSystemVolumeSlider';
 import './Player.css';
@@ -42,13 +54,37 @@ const Player: React.FC = () => {
     setVolumeScrubbing,
     toggleShuffle,
     cycleRepeat,
+    eqGains,
+    setEqGain,
+    setEqPreset,
   } = usePlayer();
+  const { coverFor } = useCatalog();
+  const { isOffline, remove } = useOffline();
+  const lyricsStatic = current ? lyricsFor(current.id) : undefined;
+  const [remoteLyrics, setRemoteLyrics] = useState<string | null>(null);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const [eqOpen, setEqOpen] = useState(false);
   const navigate = useNavigate();
   const volumeSlotRef = useRef<HTMLDivElement>(null);
+  const lyrics = parseLyrics(remoteLyrics) ?? lyricsStatic;
   const { active: nativeSystemVolume, sync: syncNativeVolume } = useNativeSystemVolumeSlider(
     volumeSlotRef,
-    Boolean(current)
+    Boolean(current) && !lyricsOpen && !eqOpen
   );
+
+  useEffect(() => {
+    setLyricsOpen(false);
+    setEqOpen(false);
+    setRemoteLyrics(null);
+    if (!current) return;
+    let cancelled = false;
+    void fetchLyrics(current.id).then((text) => {
+      if (!cancelled) setRemoteLyrics(text);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [current?.id]);
 
   if (!current) {
     return (
@@ -80,10 +116,83 @@ const Player: React.FC = () => {
           <button type="button" className="player-back" onClick={() => navigate('/')}>
             <IonIcon icon={chevronBack} />
           </button>
-          <span className="player-label">NOW PLAYING</span>
-          <span className="player-spacer" />
+          <span className="player-label">
+            {eqOpen ? 'EQUALIZER' : lyricsOpen ? 'LYRICS' : 'NOW PLAYING'}
+          </span>
+          {isOffline(current.id) ? (
+            <button
+              type="button"
+              className="player-cached"
+              aria-label="Remove download"
+              onClick={() => remove(current.id)}
+            >
+              <Cross className="player-cached-cross" thickness={28} />
+            </button>
+          ) : (
+            <span className="player-top-slot" />
+          )}
         </div>
 
+        {eqOpen ? (
+          <section className="player-eq">
+            <div className="player-eq-presets">
+              {(Object.keys(EQ_PRESET_LABELS) as EqPresetId[]).map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={`player-eq-preset${presetForGains(eqGains) === id ? ' accent' : ''}`}
+                  onClick={() => setEqPreset(id)}
+                >
+                  {EQ_PRESET_LABELS[id]}
+                </button>
+              ))}
+            </div>
+            {EQ_LABELS.map((label, i) => (
+              <div key={label} className="player-eq-row">
+                <span className="player-eq-hz">{label}</span>
+                <IonRange
+                  min={EQ_MIN}
+                  max={EQ_MAX}
+                  step={0.5}
+                  value={eqGains[i]}
+                  onIonInput={(e) => setEqGain(i, e.detail.value as number)}
+                />
+                <span className="player-eq-db">
+                  {eqGains[i] > 0 ? '+' : ''}
+                  {eqGains[i].toFixed(1)}
+                </span>
+              </div>
+            ))}
+            <button
+              type="button"
+              className={`player-eq-off${presetForGains(eqGains) === 'flat' ? ' accent' : ''}`}
+              onClick={() => setEqPreset('flat')}
+            >
+              OFF
+            </button>
+          </section>
+        ) : lyricsOpen && lyrics ? (
+          <section className="player-lyrics">
+            {lyrics.map((block, i) => {
+              if (block.kind === 'gap') {
+                return <div key={i} className="player-lyrics-gap" />;
+              }
+              if (block.kind === 'section') {
+                return (
+                  <div key={i} className="player-lyrics-section">
+                    {block.text}
+                  </div>
+                );
+              }
+              return (
+                <p key={i} className="player-lyrics-line">
+                  {block.text}
+                </p>
+              );
+            })}
+          </section>
+        ) : (
+          <>
         <div className="player-cover-wrap">
           <Cover
             album={current.album}
@@ -176,7 +285,37 @@ const Player: React.FC = () => {
             />
           </div>
         </div>
+          </>
+        )}
       </IonContent>
+      <IonFooter className="ion-no-border player-footer">
+        <nav className="player-dock">
+          <button
+            type="button"
+            className={`player-dock-btn${lyricsOpen ? ' accent' : ''}`}
+            disabled={!lyrics}
+            aria-label={lyricsOpen ? 'Close lyrics' : 'Lyrics'}
+            onClick={() => {
+              if (!lyrics) return;
+              setLyricsOpen((open) => !open);
+              setEqOpen(false);
+            }}
+          >
+            <LyricsIcon className="player-dock-icon" />
+          </button>
+          <button
+            type="button"
+            className={`player-dock-btn${eqOpen ? ' accent' : ''}`}
+            aria-label={eqOpen ? 'Close equalizer' : 'Equalizer'}
+            onClick={() => {
+              setEqOpen((open) => !open);
+              setLyricsOpen(false);
+            }}
+          >
+            <EqIcon className="player-dock-icon" />
+          </button>
+        </nav>
+      </IonFooter>
     </IonPage>
   );
 };

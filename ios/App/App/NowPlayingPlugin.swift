@@ -18,12 +18,21 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "setMetadata", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setPlaybackState", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setPositionState", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "clear", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "clear", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setEq", returnType: CAPPluginReturnPromise)
     ]
 
-    private var player: AVPlayer?
-    private var timeObserver: Any?
-    private var endObserver: NSObjectProtocol?
+    private var engine: AVAudioEngine?
+    private var playerNode: AVAudioPlayerNode?
+    private var eqUnit: AVAudioUnitEQ?
+    private var audioFile: AVAudioFile?
+    private var seekSeconds: Double = 0
+    private var eqGains: [Float] = [0, 0, 0, 0, 0]
+    private var playGen = 0
+    private var ignoreCompletion = false
+    private var posTimer: Timer?
+    private var downloadTask: URLSessionDownloadTask?
+
     private var info: [String: Any] = [:]
     private var artworkImage: UIImage?
     /// Keep one artwork wrapper — recreating it on every Now Playing write drops the cover on iOS.
@@ -70,12 +79,10 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
             let artwork = self.resolveArtwork(path: artworkPath, base64: artworkBase64, src: nil)
 
             DispatchQueue.main.async {
+                self.playGen += 1
+                let gen = self.playGen
                 self.activateAudioSession()
                 self.tearDownPlayer()
-
-                let item = AVPlayerItem(url: fileURL)
-                let player = AVPlayer(playerItem: item)
-                self.player = player
 
                 self.info = [
                     MPMediaItemPropertyTitle: title,
@@ -90,25 +97,15 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
                 self.hasActiveTrack = true
                 self.setArtwork(artwork)
                 self.publishNowPlaying()
-                self.attachObservers(to: player, item: item)
-                player.play()
-                self.isPlayingFlag = true
-                // One reinforce after AVPlayer starts — not a loop (loops drop artwork on iOS).
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                    guard let self = self, self.player === player else { return }
-                    self.publishNowPlaying()
-                }
-                self.notifyListeners("playing", data: [:])
-                call.resolve()
+                self.startPlayback(url: fileURL, generation: gen, call: call)
             }
         }
     }
 
     @objc func pause(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
-            // Keep AVPlayer + Now Playing card alive (Yandex Music style) — only freeze rate.
             self.activateAudioSession()
-            self.player?.pause()
+            self.pauseEngine()
             self.isPlayingFlag = false
             self.publishNowPlaying()
             self.notifyListeners("paused", data: [:])
@@ -119,7 +116,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func resume(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             self.activateAudioSession()
-            self.player?.play()
+            self.playerNode?.play()
             self.isPlayingFlag = true
             self.publishNowPlaying()
             self.notifyListeners("playing", data: [:])
@@ -133,21 +130,16 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
         DispatchQueue.main.async {
-            let cm = CMTime(seconds: max(0, time), preferredTimescale: 600)
-            self.player?.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                guard let self = self, finished else {
-                    call.resolve()
-                    return
-                }
-                self.publishNowPlaying()
-                self.emitTimeUpdate()
-                call.resolve()
-            }
+            self.seekEngine(to: time)
+            self.publishNowPlaying()
+            self.emitTimeUpdate()
+            call.resolve()
         }
     }
 
     @objc func stop(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
+            self.playGen += 1
             self.tearDownPlayer()
             self.isPlayingFlag = false
             self.hasActiveTrack = false
@@ -160,13 +152,28 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func getStatus(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
-            let position = self.player?.currentTime().seconds ?? 0
+            let position = self.enginePosition()
             let duration = self.playerDuration()
             call.resolve([
-                "position": position.isFinite ? max(0, position) : 0,
+                "position": position,
                 "duration": duration,
                 "playing": self.isPlayingFlag
             ])
+        }
+    }
+
+    @objc func setEq(_ call: CAPPluginCall) {
+        var gains: [Float] = []
+        if let arr = call.getArray("gains") {
+            for item in arr {
+                if let number = item as? NSNumber {
+                    gains.append(number.floatValue)
+                }
+            }
+        }
+        DispatchQueue.main.async {
+            self.applyEqGains(gains)
+            call.resolve()
         }
     }
 
@@ -203,7 +210,6 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func setPlaybackState(_ call: CAPPluginCall) {
         let state = call.getString("playbackState") ?? "none"
         DispatchQueue.main.async {
-            // "paused" / "playing" keep the card; only explicit stop/clear dismisses it.
             if state == "none" {
                 call.resolve()
                 return
@@ -238,6 +244,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func clear(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
+            self.playGen += 1
             self.tearDownPlayer()
             self.isPlayingFlag = false
             self.hasActiveTrack = false
@@ -248,64 +255,205 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
-    // MARK: - Player helpers
+    // MARK: - Engine
 
-    private func attachObservers(to player: AVPlayer, item: AVPlayerItem) {
-        // Frequent Now Playing writes drop artwork. Only push progress to JS here;
-        // lock screen uses ElapsedPlaybackTime + PlaybackRate to animate on its own.
-        timeObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
-            queue: .main
-        ) { [weak self] _ in
-            self?.emitTimeUpdate()
+    private func startPlayback(url: URL, generation: Int, call: CAPPluginCall) {
+        if url.isFileURL, FileManager.default.fileExists(atPath: url.path) {
+            do {
+                try startEngine(fileURL: url)
+                finishPlayStart(call)
+            } catch {
+                call.reject(error.localizedDescription)
+            }
+            return
         }
 
-        endObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: item,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self = self else { return }
-            // Stay on lock screen / Control Center with cover until next track or stop.
-            self.isPlayingFlag = false
-            self.publishNowPlaying()
-            self.notifyListeners("ended", data: [:])
-        }
-
-        item.asset.loadValuesAsynchronously(forKeys: ["duration"]) {
-            var error: NSError?
-            let status = item.asset.statusOfValue(forKey: "duration", error: &error)
-            guard status == .loaded else { return }
+        downloadTask?.cancel()
+        let task = URLSession.shared.downloadTask(with: url) { [weak self] tmp, _, error in
             DispatchQueue.main.async {
-                let duration = self.playerDuration()
-                if duration > 0 {
-                    self.info[MPMediaItemPropertyPlaybackDuration] = duration
-                    self.publishNowPlaying()
-                    self.emitTimeUpdate()
+                guard let self = self, generation == self.playGen else { return }
+                if let error = error {
+                    call.reject(error.localizedDescription)
+                    return
                 }
+                guard let tmp = tmp else {
+                    call.reject("download failed")
+                    return
+                }
+                let dest = self.cacheURL(generation)
+                try? FileManager.default.removeItem(at: dest)
+                do {
+                    try FileManager.default.moveItem(at: tmp, to: dest)
+                    try self.startEngine(fileURL: dest)
+                    self.finishPlayStart(call)
+                } catch {
+                    call.reject(error.localizedDescription)
+                }
+            }
+        }
+        downloadTask = task
+        task.resume()
+    }
+
+    private func finishPlayStart(_ call: CAPPluginCall) {
+        isPlayingFlag = true
+        publishNowPlaying()
+        notifyListeners("playing", data: [:])
+        call.resolve()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.publishNowPlaying()
+        }
+    }
+
+    private func startEngine(fileURL: URL) throws {
+        tearDownEngine()
+        let file = try AVAudioFile(forReading: fileURL)
+        audioFile = file
+        seekSeconds = 0
+
+        let engine = AVAudioEngine()
+        let playerNode = AVAudioPlayerNode()
+        let eq = AVAudioUnitEQ(numberOfBands: 5)
+        configureEq(eq)
+
+        engine.attach(playerNode)
+        engine.attach(eq)
+        let format = file.processingFormat
+        engine.connect(playerNode, to: eq, format: format)
+        engine.connect(eq, to: engine.mainMixerNode, format: format)
+        engine.prepare()
+        try engine.start()
+
+        self.engine = engine
+        self.playerNode = playerNode
+        self.eqUnit = eq
+
+        scheduleFrom(0)
+        playerNode.play()
+        startPositionTimer()
+
+        let duration = playerDuration()
+        if duration > 0 {
+            info[MPMediaItemPropertyPlaybackDuration] = duration
+        }
+    }
+
+    private func configureEq(_ eq: AVAudioUnitEQ) {
+        let freqs: [Float] = [60, 250, 1000, 4000, 12000]
+        for (index, band) in eq.bands.enumerated() {
+            if index == 0 {
+                band.filterType = .lowShelf
+            } else if index == eq.bands.count - 1 {
+                band.filterType = .highShelf
+            } else {
+                band.filterType = .parametric
+            }
+            band.frequency = freqs[index]
+            band.bandwidth = 1.0
+            band.gain = index < eqGains.count ? eqGains[index] : 0
+            band.bypass = eqGains.allSatisfy { $0.magnitude < 0.05 }
+        }
+    }
+
+    private func applyEqGains(_ gains: [Float]) {
+        var next = [Float](repeating: 0, count: 5)
+        for i in 0..<min(5, gains.count) {
+            next[i] = max(-12, min(12, gains[i]))
+        }
+        eqGains = next
+        let eq = eqUnit
+        let bypass = next.allSatisfy { $0.magnitude < 0.05 }
+        if let eq = eq {
+            for (index, band) in eq.bands.enumerated() where index < next.count {
+                band.gain = next[index]
+                band.bypass = bypass
             }
         }
     }
 
+    private func scheduleFrom(_ seconds: Double) {
+        guard let file = audioFile, let node = playerNode else { return }
+        let rate = file.processingFormat.sampleRate
+        let start = AVAudioFramePosition(max(0, seconds) * rate)
+        guard start < file.length else { return }
+        let frames = AVAudioFrameCount(file.length - start)
+        ignoreCompletion = false
+        node.scheduleSegment(file, startingFrame: start, frameCount: frames, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self = self, !self.ignoreCompletion else { return }
+                self.isPlayingFlag = false
+                self.publishNowPlaying()
+                self.notifyListeners("ended", data: [:])
+            }
+        }
+    }
+
+    private func seekEngine(to time: Double) {
+        guard audioFile != nil, playerNode != nil else { return }
+        let duration = playerDuration()
+        let clamped = max(0, duration > 0 ? min(time, duration) : time)
+        ignoreCompletion = true
+        playerNode?.stop()
+        seekSeconds = clamped
+        scheduleFrom(clamped)
+        if isPlayingFlag {
+            playerNode?.play()
+        }
+    }
+
+    private func pauseEngine() {
+        playerNode?.pause()
+    }
+
+    private func enginePosition() -> Double {
+        guard let node = playerNode, audioFile != nil else { return seekSeconds }
+        if let last = node.lastRenderTime, last.isSampleTimeValid,
+           let playerTime = node.playerTime(forNodeTime: last) {
+            let elapsed = Double(playerTime.sampleTime) / playerTime.sampleRate
+            let position = seekSeconds + elapsed
+            return position.isFinite ? max(0, position) : seekSeconds
+        }
+        return seekSeconds
+    }
+
+    private func cacheURL(_ generation: Int) -> URL {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        return dir.appendingPathComponent("nowplaying-\(generation).mp3")
+    }
+
+    private func startPositionTimer() {
+        posTimer?.invalidate()
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.emitTimeUpdate()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        posTimer = timer
+    }
+
+    private func tearDownEngine() {
+        ignoreCompletion = true
+        posTimer?.invalidate()
+        posTimer = nil
+        playerNode?.stop()
+        engine?.stop()
+        engine?.reset()
+        playerNode = nil
+        eqUnit = nil
+        engine = nil
+        audioFile = nil
+        seekSeconds = 0
+    }
+
     private func tearDownPlayer() {
-        if let observer = timeObserver, let player = player {
-            player.removeTimeObserver(observer)
-        }
-        timeObserver = nil
-        if let endObserver = endObserver {
-            NotificationCenter.default.removeObserver(endObserver)
-        }
-        endObserver = nil
-        player?.pause()
-        player = nil
+        downloadTask?.cancel()
+        downloadTask = nil
+        tearDownEngine()
     }
 
     private func playerDuration() -> Double {
-        guard let item = player?.currentItem else { return 0 }
-        let seconds = item.duration.seconds
-        if seconds.isFinite && seconds > 0 { return seconds }
-        let assetSeconds = item.asset.duration.seconds
-        return assetSeconds.isFinite && assetSeconds > 0 ? assetSeconds : 0
+        guard let file = audioFile else { return 0 }
+        let seconds = Double(file.length) / file.processingFormat.sampleRate
+        return seconds.isFinite && seconds > 0 ? seconds : 0
     }
 
     private func setArtwork(_ image: UIImage?) {
@@ -337,15 +485,13 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func syncPlaybackFields() {
-        let position = player?.currentTime().seconds ?? 0
-        let safePosition = position.isFinite ? max(0, position) : 0
+        let position = enginePosition()
         let duration = playerDuration()
 
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = safePosition
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = position
         if duration > 0 {
             info[MPMediaItemPropertyPlaybackDuration] = duration
         }
-        // rate 0 = paused, but card + artwork stay (like Yandex Music).
         info[MPNowPlayingInfoPropertyPlaybackRate] = isPlayingFlag ? 1.0 : 0.0
         info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
         info[MPNowPlayingInfoPropertyMediaType] =
@@ -367,13 +513,9 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func emitTimeUpdate() {
-        let position = player?.currentTime().seconds ?? 0
-        let duration = playerDuration()
-        let safePosition = position.isFinite ? max(0, position) : 0
-
         notifyListeners("timeupdate", data: [
-            "position": safePosition,
-            "duration": duration,
+            "position": enginePosition(),
+            "duration": playerDuration(),
             "playing": isPlayingFlag
         ])
     }
@@ -395,7 +537,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         center.playCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
             self.activateAudioSession()
-            self.player?.play()
+            self.playerNode?.play()
             self.isPlayingFlag = true
             self.publishNowPlaying()
             self.notifyListeners("playing", data: [:])
@@ -407,7 +549,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         center.pauseCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
             self.activateAudioSession()
-            self.player?.pause()
+            self.pauseEngine()
             self.isPlayingFlag = false
             self.publishNowPlaying()
             self.notifyListeners("paused", data: [:])
@@ -434,12 +576,9 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
                 return .commandFailed
             }
             let time = event.positionTime
-            let cm = CMTime(seconds: max(0, time), preferredTimescale: 600)
-            self.player?.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                guard let self = self, finished else { return }
-                self.publishNowPlaying()
-                self.emitTimeUpdate()
-            }
+            self.seekEngine(to: time)
+            self.publishNowPlaying()
+            self.emitTimeUpdate()
             self.notifyListeners("action", data: [
                 "action": "seekto",
                 "seekTime": time

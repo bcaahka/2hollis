@@ -91,9 +91,16 @@ body.ion-palette-dark .theme-cross {
   display: flex;
   align-items: center;
   width: 100%;
+  border-bottom: 1px solid var(--line);
+}
+
+.track-main {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
   background: none;
   border: none;
-  border-bottom: 1px solid var(--line);
   border-radius: 0;
   color: var(--fg);
   padding: 13px 4px;
@@ -102,9 +109,33 @@ body.ion-palette-dark .theme-cross {
   cursor: pointer;
 }
 
-.track:active {
+.track-main:active {
   background: var(--press-bg);
   color: var(--press-fg);
+}
+
+.track-cached {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-right: 6px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.track-cached:active {
+  opacity: 0.6;
+}
+
+.track-cached-cross {
+  width: 8px;
+  height: 8px;
 }
 
 .track-num {

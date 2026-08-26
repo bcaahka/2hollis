@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { Capacitor } from '@capacitor/core';
 import type { PluginListenerHandle } from '@capacitor/core';
 import { Volume } from '@capawesome/capacitor-volume';
-import { SONGS, coverFor } from '../data/songs';
+import { useCatalog } from '../data/catalogContext';
 import type { Track } from '../data/songs';
 import { PlayerContext } from './context';
 import type { PlayerContextValue, RepeatMode } from './context';
@@ -15,11 +15,17 @@ import {
   syncPositionState,
 } from './mediaSession';
 import { NowPlaying, isIosNowPlaying, toPublicPath } from './nowPlaying';
+import { useOffline } from './offlineContext';
+import { EQ_PRESETS, clampGain, loadEqGains, normalizeGains, saveEqGains } from './eq';
+import type { EqGains, EqPresetId } from './eq';
+import { attachWebEq, resumeWebEq, setWebEqGains } from './webEq';
 
 const toBase64Payload = (dataUrl: string): string =>
   dataUrl.replace(/^data:image\/\w+;base64,/, '');
 
 export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const { songs, coverFor } = useCatalog();
+  const { resolveUrl, download } = useOffline();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const iosNative = isIosNowPlaying();
   const [current, setCurrent] = useState<Track | null>(null);
@@ -29,6 +35,7 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [volume, setVolumeState] = useState(1);
   const [shuffle, setShuffle] = useState(false);
   const [repeat, setRepeat] = useState<RepeatMode>('off');
+  const [eqGains, setEqGainsState] = useState<EqGains>(loadEqGains);
 
   const currentRef = useRef(current);
   currentRef.current = current;
@@ -42,18 +49,28 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   progressRef.current = progress;
   const isPlayingRef = useRef(isPlaying);
   isPlayingRef.current = isPlaying;
+  const songsRef = useRef(songs);
+  songsRef.current = songs;
+  const eqGainsRef = useRef(eqGains);
+  eqGainsRef.current = eqGains;
+
+  useEffect(() => {
+    if (!current) return;
+    void download(current);
+  }, [current, download]);
 
   const next = useCallback(() => {
     setCurrent((prev) => {
       if (!prev) return prev;
-      const idx = SONGS.findIndex((s) => s.id === prev.id);
+      const list = songsRef.current;
+      const idx = list.findIndex((s) => s.id === prev.id);
       if (idx < 0) return prev;
-      if (shuffleRef.current && SONGS.length > 1) {
+      if (shuffleRef.current && list.length > 1) {
         let r = idx;
-        while (r === idx) r = Math.floor(Math.random() * SONGS.length);
-        return SONGS[r];
+        while (r === idx) r = Math.floor(Math.random() * list.length);
+        return list[r];
       }
-      return SONGS[(idx + 1) % SONGS.length];
+      return list[(idx + 1) % list.length];
     });
   }, []);
 
@@ -77,14 +94,15 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
     setCurrent((p) => {
       if (!p) return p;
-      const idx = SONGS.findIndex((s) => s.id === p.id);
+      const list = songsRef.current;
+      const idx = list.findIndex((s) => s.id === p.id);
       if (idx < 0) return p;
-      if (shuffleRef.current && SONGS.length > 1) {
+      if (shuffleRef.current && list.length > 1) {
         let r = idx;
-        while (r === idx) r = Math.floor(Math.random() * SONGS.length);
-        return SONGS[r];
+        while (r === idx) r = Math.floor(Math.random() * list.length);
+        return list[r];
       }
-      return SONGS[(idx - 1 + SONGS.length) % SONGS.length];
+      return list[(idx - 1 + list.length) % list.length];
     });
   }, [restartCurrent]);
 
@@ -105,22 +123,30 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       artworkBase64 = toBase64Payload(dataUrl);
     }
 
+    const url = await resolveUrl(track);
     await NowPlaying.play({
-      url: toPublicPath(track.file),
+      url: toPublicPath(url),
       title: track.title,
       artist: '2hollis',
       album: track.album,
       artworkPath: cover ? toPublicPath(cover) : undefined,
       artworkBase64,
     });
-  }, []);
+    void NowPlaying.setEq({ gains: [...eqGainsRef.current] }).catch(() => undefined);
+  }, [coverFor, resolveUrl]);
 
   const getAudio = useCallback((): HTMLAudioElement => {
     if (!audioRef.current) {
       const audio = new Audio();
       audio.preload = 'metadata';
+      audio.crossOrigin = 'anonymous';
       audio.setAttribute('playsinline', 'true');
       audio.volume = Capacitor.isNativePlatform() ? 1 : volumeRef.current;
+      try {
+        attachWebEq(audio, eqGainsRef.current);
+      } catch {
+        // Web Audio EQ unavailable (autoplay / old webview)
+      }
       audio.addEventListener('timeupdate', () => setProgress(audio.currentTime));
       audio.addEventListener('loadedmetadata', () => setDuration(audio.duration || 0));
       audio.addEventListener('durationchange', () => setDuration(audio.duration || 0));
@@ -164,12 +190,20 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   useEffect(() => {
     if (iosNative) return;
     if (!current) return;
+    let cancelled = false;
     const audio = getAudio();
-    audio.src = current.file;
     setProgress(0);
     setDuration(0);
-    audio.play().catch(() => undefined);
-  }, [current, getAudio, iosNative]);
+    void resolveUrl(current).then((url) => {
+      if (cancelled) return;
+      audio.src = url;
+      resumeWebEq();
+      audio.play().catch(() => undefined);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [current, getAudio, iosNative, resolveUrl]);
 
   // iOS native player events.
   useEffect(() => {
@@ -237,6 +271,7 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) {
+      resumeWebEq();
       audio.play().catch(() => undefined);
     } else {
       audio.pause();
@@ -318,6 +353,43 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     };
   }, []);
 
+  const applyEq = useCallback(
+    (next: EqGains) => {
+      const gains = normalizeGains(next);
+      setEqGainsState(gains);
+      eqGainsRef.current = gains;
+      saveEqGains(gains);
+      if (iosNative) {
+        void NowPlaying.setEq({ gains: [...gains] }).catch(() => undefined);
+        return;
+      }
+      setWebEqGains(gains);
+    },
+    [iosNative]
+  );
+
+  const setEqGain = useCallback(
+    (index: number, value: number) => {
+      const next = [...eqGainsRef.current] as EqGains;
+      next[index] = clampGain(value);
+      applyEq(next);
+    },
+    [applyEq]
+  );
+
+  const setEqPreset = useCallback(
+    (id: EqPresetId) => {
+      applyEq(EQ_PRESETS[id]);
+    },
+    [applyEq]
+  );
+
+  useEffect(() => {
+    if (iosNative) {
+      void NowPlaying.setEq({ gains: [...eqGainsRef.current] }).catch(() => undefined);
+    }
+  }, [iosNative]);
+
   const toggleShuffle = useCallback(() => setShuffle((s) => !s), []);
 
   const cycleRepeat = useCallback(() => {
@@ -333,6 +405,7 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           return;
         }
         audioRef.current?.play().catch(() => undefined);
+        resumeWebEq();
       },
       pause: () => {
         if (iosNative) {
@@ -393,6 +466,9 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       setVolumeScrubbing,
       toggleShuffle,
       cycleRepeat,
+      eqGains,
+      setEqGain,
+      setEqPreset,
     }),
     [
       current,
@@ -411,6 +487,9 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       setVolumeScrubbing,
       toggleShuffle,
       cycleRepeat,
+      eqGains,
+      setEqGain,
+      setEqPreset,
     ]
   );
 

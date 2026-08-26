@@ -4,6 +4,8 @@ import { IonApp, IonRouterOutlet, setupIonicReact } from '@ionic/react';
 import { IonReactRouter } from '@ionic/react-router';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar, Style } from '@capacitor/status-bar';
+import { CatalogProvider } from './data/CatalogProvider';
+import { OfflineProvider } from './player/OfflineProvider';
 import { PlayerProvider } from './player/PlayerProvider';
 import { ThemeProvider } from './theme/ThemeProvider';
 import { useTheme } from './theme/theme';
@@ -47,14 +49,18 @@ const ThemedApp: React.FC = () => {
 
   return (
     <IonApp>
-      <PlayerProvider>
-        <IonReactRouter>
-          <IonRouterOutlet>
-            <Route path="/player" element={<Player />} />
-            <Route path="/" element={<Library />} />
-          </IonRouterOutlet>
-        </IonReactRouter>
-      </PlayerProvider>
+      <CatalogProvider>
+        <OfflineProvider>
+          <PlayerProvider>
+            <IonReactRouter>
+              <IonRouterOutlet>
+                <Route path="/player" element={<Player />} />
+                <Route path="/" element={<Library />} />
+              </IonRouterOutlet>
+            </IonReactRouter>
+          </PlayerProvider>
+        </OfflineProvider>
+      </CatalogProvider>
     </IonApp>
   );
 };

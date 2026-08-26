@@ -41,6 +41,7 @@ export interface NowPlayingPlugin {
     playbackRate?: number;
   }): Promise<void>;
   clear(): Promise<void>;
+  setEq(options: { gains: number[] }): Promise<void>;
   addListener(
     eventName: 'action',
     listenerFunc: (data: NowPlayingAction) => void
@@ -59,4 +60,7 @@ export const NowPlaying = registerPlugin<NowPlayingPlugin>('NowPlaying');
 
 export const isIosNowPlaying = (): boolean => Capacitor.getPlatform() === 'ios';
 
-export const toPublicPath = (path: string): string => path.replace(/^\//, '');
+export const toPublicPath = (path: string): string => {
+  if (/^(https?:|blob:|file:|capacitor:)/i.test(path)) return path;
+  return path.replace(/^\//, '');
+};

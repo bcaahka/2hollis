@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>2HOLLIS · ADMIN</title>
+    <style>
+      :root {
+        --bg: #030711;
+        --fg: #e5e7ea;
+        --strong: #f8fafb;
+        --line: #384252;
+        --accent: #b91c1c;
+        --muted: #8b93a1;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Helvetica, Arial, sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+        letter-spacing: 0.04em;
+      }
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 40px 20px 80px;
+      }
+      h1 {
+        font-weight: 300;
+        letter-spacing: 0.18em;
+        font-size: 22px;
+        color: var(--strong);
+        text-transform: uppercase;
+      }
+      h2 {
+        font-weight: 300;
+        letter-spacing: 0.14em;
+        font-size: 14px;
+        text-transform: uppercase;
+        margin: 36px 0 14px;
+        color: var(--strong);
+      }
+      label {
+        display: block;
+        font-size: 11px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin: 14px 0 6px;
+      }
+      input, select, textarea {
+        width: 100%;
+        background: transparent;
+        color: var(--strong);
+        border: 1px solid var(--line);
+        padding: 10px 12px;
+      }
+      textarea {
+        min-height: 220px;
+        resize: vertical;
+        line-height: 1.45;
+        letter-spacing: 0.02em;
+      }
+      input, select, textarea, button {
+        font: inherit;
+        border-radius: 0;
+      }
+      button {
+        margin-top: 18px;
+        background: var(--strong);
+        color: #0d0d0d;
+        border: none;
+        padding: 12px 18px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+      button:active { opacity: 0.8; }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .status {
+        margin-top: 12px;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        min-height: 1.2em;
+      }
+      .ok { color: #86efac; }
+      .err { color: var(--accent); }
+      .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>2HOLLIS ADMIN</h1>
+      <p class="hint">Local upload for tracks and covers. Same API later goes to a server.</p>
+
+      <label>Admin key</label>
+      <input id="key" type="password" value="dev" autocomplete="off" />
+
+      <h2>New track</h2>
+      <form id="track-form">
+        <label>Audio (mp3)</label>
+        <input name="audio" type="file" accept="audio/mpeg,audio/*" required />
+        <label>Title</label>
+        <input name="title" required />
+        <div class="row">
+          <div>
+            <label>Album id</label>
+            <input name="albumId" placeholder="boy" required />
+          </div>
+          <div>
+            <label>Album title</label>
+            <input name="albumTitle" placeholder="boy" required />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>Year</label>
+            <input name="year" type="number" value="2024" required />
+          </div>
+          <div>
+            <label>Track number</label>
+            <input name="number" type="number" value="1" min="1" required />
+          </div>
+        </div>
+        <label>Cover (optional)</label>
+        <input name="cover" type="file" accept="image/*" />
+        <button type="submit">Upload track</button>
+        <div id="track-status" class="status"></div>
+      </form>
+
+      <h2>Cover only</h2>
+      <form id="cover-form">
+        <label>Image</label>
+        <input name="cover" type="file" accept="image/*" required />
+        <label>Cover id</label>
+        <input name="id" placeholder="boy" required />
+        <div class="row">
+          <div>
+            <label>Attach to album id</label>
+            <input name="albumId" placeholder="optional" />
+          </div>
+          <div>
+            <label>Attach to track id</label>
+            <input name="trackId" placeholder="optional" />
+          </div>
+        </div>
+        <button type="submit">Upload cover</button>
+        <div id="cover-status" class="status"></div>
+      </form>
+
+      <h2>Lyrics</h2>
+      <form id="lyrics-form">
+        <label>Track id</label>
+        <input name="trackId" placeholder="singles-4" required />
+        <p class="hint">album id + number, e.g. star-2 or singles-4</p>
+        <label>Paste lyrics</label>
+        <textarea name="text" placeholder="[Verse 1]&#10;…"></textarea>
+        <label>Or .txt file</label>
+        <input name="lyrics" type="file" accept=".txt,text/plain" />
+        <button type="submit">Save lyrics</button>
+        <div id="lyrics-status" class="status"></div>
+      </form>
+    </main>
+    <script>
+      const keyInput = document.getElementById('key');
+      const saved = localStorage.getItem('admin-key');
+      if (saved) keyInput.value = saved;
+      keyInput.addEventListener('change', () => localStorage.setItem('admin-key', keyInput.value));
+
+      const send = async (url, form, statusEl) => {
+        statusEl.className = 'status';
+        statusEl.textContent = 'UPLOADING…';
+        const body = new FormData(form);
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'x-admin-key': keyInput.value },
+          body,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          statusEl.className = 'status err';
+          statusEl.textContent = data.error || res.statusText;
+          return;
+        }
+        statusEl.className = 'status ok';
+        statusEl.textContent = 'SAVED';
+        form.reset();
+      };
+
+      document.getElementById('track-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        send('/api/admin/tracks', e.target, document.getElementById('track-status'));
+      });
+      document.getElementById('cover-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        send('/api/admin/covers', e.target, document.getElementById('cover-status'));
+      });
+      document.getElementById('lyrics-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        send('/api/admin/lyrics', e.target, document.getElementById('lyrics-status'));
+      });
+    </script>
+  </body>
+</html>

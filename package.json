@@ -10,7 +10,9 @@
     "cap:sync": "cap sync && node scripts/fix-spm-paths.mjs",
     "test.e2e": "cypress run",
     "test.unit": "vitest",
-    "lint": "eslint"
+    "lint": "eslint",
+    "server": "npm run dev --prefix server",
+    "server:import": "npm run import --prefix server"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",

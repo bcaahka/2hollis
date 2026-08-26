@@ -46,3 +46,7 @@ yarn-error.log*
 /ios/DerivedData
 *.xcuserstate
 xcuserdata/
+
+# Streaming backend local storage
+/server/node_modules
+/server/data

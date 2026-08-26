@@ -1,13 +1,14 @@
 import { IonIcon } from '@ionic/react';
 import { pause, play } from 'ionicons/icons';
 import { useNavigate } from 'react-router-dom';
-import { coverFor } from '../data/songs';
+import { useCatalog } from '../data/catalogContext';
 import { usePlayer } from '../player/context';
 import Cover from './Cover';
 import './MiniPlayer.css';
 
 const MiniPlayer: React.FC = () => {
   const { current, isPlaying, toggle, progress, duration } = usePlayer();
+  const { coverFor } = useCatalog();
   const navigate = useNavigate();
 
   if (!current) return null;
