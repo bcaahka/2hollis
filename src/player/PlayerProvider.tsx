@@ -45,8 +45,8 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   shuffleRef.current = shuffle;
   const repeatRef = useRef(repeat);
   repeatRef.current = repeat;
-  const progressRef = useRef(progress);
-  progressRef.current = progress;
+  const durationRef = useRef(duration);
+  durationRef.current = duration;
   const isPlayingRef = useRef(isPlaying);
   isPlayingRef.current = isPlaying;
   const songsRef = useRef(songs);
@@ -108,6 +108,10 @@ export const PlayerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const handleEndedRef = useRef<() => void>(() => undefined);
   handleEndedRef.current = () => {
+    const dur = durationRef.current;
+    const pos = progressRef.current;
+    // iOS seek/stop can emit a fake "ended" in the middle of a track.
+    if (dur > 2 && dur - pos > 1.25) return;
     if (repeatRef.current === 'one') {
       restartCurrent();
       return;

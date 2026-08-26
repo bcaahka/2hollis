@@ -64,6 +64,7 @@ const Player: React.FC = () => {
   const [remoteLyrics, setRemoteLyrics] = useState<string | null>(null);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [eqOpen, setEqOpen] = useState(false);
+  const [seekScrub, setSeekScrub] = useState<number | null>(null);
   const navigate = useNavigate();
   const volumeSlotRef = useRef<HTMLDivElement>(null);
   const lyrics = parseLyrics(remoteLyrics) ?? lyricsStatic;
@@ -76,6 +77,7 @@ const Player: React.FC = () => {
     setLyricsOpen(false);
     setEqOpen(false);
     setRemoteLyrics(null);
+    setSeekScrub(null);
     if (!current) return;
     let cancelled = false;
     void fetchLyrics(current.id).then((text) => {
@@ -212,13 +214,19 @@ const Player: React.FC = () => {
             min={0}
             max={duration || 1}
             step={0.1}
-            value={progress}
-            onIonChange={(e) => seek(e.detail.value as number)}
+            value={seekScrub ?? progress}
+            onIonKnobMoveStart={() => setSeekScrub(progress)}
+            onIonInput={(e) => setSeekScrub(e.detail.value as number)}
+            onIonKnobMoveEnd={(e) => {
+              const time = e.detail.value as number;
+              setSeekScrub(null);
+              seek(time);
+            }}
             disabled={duration <= 0}
           />
         </div>
         <div className="player-times">
-          <span>{fmt(progress)}</span>
+          <span>{fmt(seekScrub ?? progress)}</span>
           <span>{fmt(duration)}</span>
         </div>
 

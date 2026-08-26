@@ -29,6 +29,8 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     private var seekSeconds: Double = 0
     /// `AVAudioPlayerNode` often reports 0 while paused; freeze the last good time.
     private var frozenPosition: Double?
+    /// Invalidates `dataPlayedBack` when stop/seek tears down a scheduled segment.
+    private var scheduleGen = 0
     private var eqGains: [Float] = [0, 0, 0, 0, 0]
     private var playGen = 0
     private var ignoreCompletion = false
@@ -381,10 +383,16 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         let start = AVAudioFramePosition(max(0, seconds) * rate)
         guard start < file.length else { return }
         let frames = AVAudioFrameCount(file.length - start)
+        scheduleGen += 1
+        let gen = scheduleGen
         ignoreCompletion = false
         node.scheduleSegment(file, startingFrame: start, frameCount: frames, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             DispatchQueue.main.async {
-                guard let self = self, !self.ignoreCompletion else { return }
+                guard let self = self, gen == self.scheduleGen else { return }
+                let duration = self.playerDuration()
+                let position = self.enginePosition()
+                // stop()/seek fires this callback too — only treat a real end as ended.
+                guard duration <= 0 || position >= duration - 0.6 else { return }
                 self.isPlayingFlag = false
                 self.publishNowPlaying()
                 self.notifyListeners("ended", data: [:])
@@ -396,6 +404,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         guard audioFile != nil, playerNode != nil else { return }
         let duration = playerDuration()
         let clamped = max(0, duration > 0 ? min(time, duration) : time)
+        scheduleGen += 1
         ignoreCompletion = true
         playerNode?.stop()
         seekSeconds = clamped
@@ -446,6 +455,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func tearDownEngine() {
         ignoreCompletion = true
+        scheduleGen += 1
         posTimer?.invalidate()
         posTimer = nil
         playerNode?.stop()
