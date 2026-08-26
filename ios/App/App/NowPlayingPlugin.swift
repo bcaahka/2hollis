@@ -27,6 +27,8 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     private var eqUnit: AVAudioUnitEQ?
     private var audioFile: AVAudioFile?
     private var seekSeconds: Double = 0
+    /// `AVAudioPlayerNode` often reports 0 while paused; freeze the last good time.
+    private var frozenPosition: Double?
     private var eqGains: [Float] = [0, 0, 0, 0, 0]
     private var playGen = 0
     private var ignoreCompletion = false
@@ -108,6 +110,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
             self.pauseEngine()
             self.isPlayingFlag = false
             self.publishNowPlaying()
+            self.emitTimeUpdate()
             self.notifyListeners("paused", data: [:])
             call.resolve()
         }
@@ -116,9 +119,10 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func resume(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             self.activateAudioSession()
-            self.playerNode?.play()
+            self.resumeEngine()
             self.isPlayingFlag = true
             self.publishNowPlaying()
+            self.emitTimeUpdate()
             self.notifyListeners("playing", data: [:])
             call.resolve()
         }
@@ -395,6 +399,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         ignoreCompletion = true
         playerNode?.stop()
         seekSeconds = clamped
+        frozenPosition = isPlayingFlag ? nil : clamped
         scheduleFrom(clamped)
         if isPlayingFlag {
             playerNode?.play()
@@ -402,10 +407,19 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func pauseEngine() {
+        frozenPosition = enginePosition()
         playerNode?.pause()
     }
 
+    private func resumeEngine() {
+        frozenPosition = nil
+        playerNode?.play()
+    }
+
     private func enginePosition() -> Double {
+        if let frozen = frozenPosition {
+            return frozen
+        }
         guard let node = playerNode, audioFile != nil else { return seekSeconds }
         if let last = node.lastRenderTime, last.isSampleTimeValid,
            let playerTime = node.playerTime(forNodeTime: last) {
@@ -442,6 +456,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         engine = nil
         audioFile = nil
         seekSeconds = 0
+        frozenPosition = nil
     }
 
     private func tearDownPlayer() {
@@ -537,9 +552,10 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         center.playCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
             self.activateAudioSession()
-            self.playerNode?.play()
+            self.resumeEngine()
             self.isPlayingFlag = true
             self.publishNowPlaying()
+            self.emitTimeUpdate()
             self.notifyListeners("playing", data: [:])
             self.notifyListeners("action", data: ["action": "play"])
             return .success
@@ -552,6 +568,7 @@ public class NowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
             self.pauseEngine()
             self.isPlayingFlag = false
             self.publishNowPlaying()
+            self.emitTimeUpdate()
             self.notifyListeners("paused", data: [:])
             self.notifyListeners("action", data: ["action": "pause"])
             return .success
