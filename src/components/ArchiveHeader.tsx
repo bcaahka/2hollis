@@ -40,6 +40,7 @@ const ArchiveHeader: React.FC<ArchiveHeaderProps> = ({ view, onView }) => {
           onClick={() => onView('releases')}
         >
           RELEASES
+          <span className="lib-nav-line" aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -48,6 +49,7 @@ const ArchiveHeader: React.FC<ArchiveHeaderProps> = ({ view, onView }) => {
           onClick={() => onView('tracks')}
         >
           ALL TRACKS
+          <span className="lib-nav-line" aria-hidden="true" />
         </button>
       </nav>
     </header>

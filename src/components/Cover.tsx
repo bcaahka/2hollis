@@ -11,7 +11,9 @@ const Cover: React.FC<CoverProps> = ({ album, year, cover, playing = false }) =>
   if (cover) {
     return (
       <div className={`cover cover-img-wrap${playing ? ' playing' : ''}`}>
-        <img className="cover-img" src={cover} alt={`${album} cover`} />
+        <div className="cover-motion">
+          <img className="cover-img" src={cover} alt={`${album} cover`} />
+        </div>
       </div>
     );
   }

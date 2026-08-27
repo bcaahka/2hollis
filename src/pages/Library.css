@@ -73,10 +73,13 @@ body.ion-palette-dark .theme-cross {
 
 .lib-nav-btn {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   background: none;
   border: none;
   border-radius: 0;
-  padding: 0 0 8px;
+  padding: 0;
   font-family: inherit;
   font-size: 11px;
   font-weight: 300;
@@ -86,50 +89,52 @@ body.ion-palette-dark .theme-cross {
   cursor: pointer;
 }
 
-.lib-nav-btn::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
+.lib-nav-line {
+  display: block;
+  width: 0;
   height: 1px;
-  background: var(--fg-strong);
-  transform: scaleX(0);
-  transform-origin: left;
-  transition: transform 0.28s ease;
+  margin-top: 8px;
+  background: currentColor;
+  transition: width 0.32s ease;
 }
 
 .lib-nav-btn.active {
   color: var(--fg-strong);
 }
 
-.lib-nav-btn.active::after {
-  transform: scaleX(1);
+.lib-nav-btn.active .lib-nav-line {
+  width: 100%;
 }
 
 .lib-nav-btn:active {
   color: var(--accent);
 }
 
-.lib-pane {
-  animation: lib-pane-in 0.32s ease;
+.lib-panes {
+  position: relative;
 }
 
-@keyframes lib-pane-in {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
+.lib-pane {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  transition: opacity 0.34s ease, visibility 0.34s ease;
+}
+
+.lib-pane.is-on {
+  position: relative;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lib-nav-btn::after,
+  .lib-nav-line,
   .lib-pane {
-    animation: none;
     transition: none;
   }
 }

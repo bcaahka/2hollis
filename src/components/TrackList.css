@@ -104,6 +104,7 @@
 .bars.playing span {
   background: var(--accent);
   animation: bounce 1s ease-in-out infinite;
+  transform-origin: bottom;
 }
 
 .bars.playing span:nth-child(2) {

@@ -21,7 +21,7 @@ const Library: React.FC = () => {
 
   const onView = useCallback((next: ArchiveView) => {
     setView(next);
-    void contentRef.current?.scrollToTop(280);
+    void contentRef.current?.scrollToTop(0);
   }, []);
 
   const releases = albums.filter((album) => album.tracks.length > 0);
@@ -31,8 +31,11 @@ const Library: React.FC = () => {
       <IonContent ref={contentRef} fullscreen>
         <ArchiveHeader view={view} onView={onView} />
 
-        <div key={view} className="lib-pane">
-          {view === 'releases' ? (
+        <div className="lib-panes">
+          <div
+            className={`lib-pane${view === 'releases' ? ' is-on' : ''}`}
+            aria-hidden={view !== 'releases'}
+          >
             <div className="lib-grid">
               {releases.map((album) => {
                 const active = current?.albumId === album.id;
@@ -56,8 +59,12 @@ const Library: React.FC = () => {
                 );
               })}
             </div>
-          ) : (
-            releases.map((album) => (
+          </div>
+          <div
+            className={`lib-pane${view === 'tracks' ? ' is-on' : ''}`}
+            aria-hidden={view !== 'tracks'}
+          >
+            {releases.map((album) => (
               <section className="tracks-album" key={album.id}>
                 <button
                   type="button"
@@ -71,8 +78,8 @@ const Library: React.FC = () => {
                 </button>
                 <TrackList tracks={album.tracks} />
               </section>
-            ))
-          )}
+            ))}
+          </div>
         </div>
 
         <footer className="lib-footer">
