@@ -1,0 +1,36 @@
+.tracks-album {
+  padding: 24px 20px 4px;
+}
+
+.tracks-album-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  width: 100%;
+  padding: 0 0 10px;
+  margin: 0;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tracks-album-head:active .tracks-album-title {
+  color: var(--accent);
+}
+
+.tracks-album-title {
+  font-size: 20px;
+  font-weight: 300;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-strong);
+}
+
+.tracks-album-year {
+  font-size: 11px;
+  color: var(--fg);
+  letter-spacing: 0.2em;
+}

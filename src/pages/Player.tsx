@@ -65,6 +65,7 @@ const Player: React.FC = () => {
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [eqOpen, setEqOpen] = useState(false);
   const [seekScrub, setSeekScrub] = useState<number | null>(null);
+  const seekDraggingRef = useRef(false);
   const navigate = useNavigate();
   const volumeSlotRef = useRef<HTMLDivElement>(null);
   const lyrics = parseLyrics(remoteLyrics) ?? lyricsStatic;
@@ -78,6 +79,7 @@ const Player: React.FC = () => {
     setEqOpen(false);
     setRemoteLyrics(null);
     setSeekScrub(null);
+    seekDraggingRef.current = false;
     if (!current) return;
     let cancelled = false;
     void fetchLyrics(current.id).then((text) => {
@@ -115,7 +117,7 @@ const Player: React.FC = () => {
         onIonScroll={nativeSystemVolume ? () => syncNativeVolume() : undefined}
       >
         <div className="player-top">
-          <button type="button" className="player-back" onClick={() => navigate('/')}>
+          <button type="button" className="player-back" onClick={() => navigate(-1)}>
             <IonIcon icon={chevronBack} />
           </button>
           <span className="player-label">
@@ -215,9 +217,17 @@ const Player: React.FC = () => {
             max={duration || 1}
             step={0.1}
             value={seekScrub ?? progress}
-            onIonKnobMoveStart={() => setSeekScrub(progress)}
-            onIonInput={(e) => setSeekScrub(e.detail.value as number)}
+            onIonKnobMoveStart={() => {
+              seekDraggingRef.current = true;
+              setSeekScrub(progress);
+            }}
+            onIonInput={(e) => {
+              if (!seekDraggingRef.current) return;
+              setSeekScrub(e.detail.value as number);
+            }}
             onIonKnobMoveEnd={(e) => {
+              if (!seekDraggingRef.current) return;
+              seekDraggingRef.current = false;
               const time = e.detail.value as number;
               setSeekScrub(null);
               seek(time);

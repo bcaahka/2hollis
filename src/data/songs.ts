@@ -165,3 +165,6 @@ export const SONGS: Track[] = ALBUMS.flatMap((album) => album.tracks);
 
 export const coverFor = (track: Track): string | undefined =>
   track.cover ?? ALBUMS.find((a) => a.id === track.albumId)?.cover;
+
+export const albumCover = (album: Album): string | undefined =>
+  album.cover ?? album.tracks.find((track) => track.cover)?.cover;
