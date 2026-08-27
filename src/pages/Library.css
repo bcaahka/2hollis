@@ -72,9 +72,9 @@ body.ion-palette-dark .theme-cross {
 }
 
 .lib-nav-btn {
+  position: relative;
   background: none;
   border: none;
-  border-bottom: 1px solid transparent;
   border-radius: 0;
   padding: 0 0 8px;
   font-family: inherit;
@@ -86,13 +86,52 @@ body.ion-palette-dark .theme-cross {
   cursor: pointer;
 }
 
+.lib-nav-btn::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--fg-strong);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.28s ease;
+}
+
 .lib-nav-btn.active {
   color: var(--fg-strong);
-  border-bottom-color: var(--fg-strong);
+}
+
+.lib-nav-btn.active::after {
+  transform: scaleX(1);
 }
 
 .lib-nav-btn:active {
   color: var(--accent);
+}
+
+.lib-pane {
+  animation: lib-pane-in 0.32s ease;
+}
+
+@keyframes lib-pane-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lib-nav-btn::after,
+  .lib-pane {
+    animation: none;
+    transition: none;
+  }
 }
 
 .lib-grid {
@@ -184,4 +223,41 @@ body.ion-palette-dark .theme-cross {
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--subtle);
+}
+
+.tracks-album {
+  padding: 24px 20px 4px;
+}
+
+.tracks-album-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  width: 100%;
+  padding: 0 0 10px;
+  margin: 0;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tracks-album-head:active .tracks-album-title {
+  color: var(--accent);
+}
+
+.tracks-album-title {
+  font-size: 20px;
+  font-weight: 300;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-strong);
+}
+
+.tracks-album-year {
+  font-size: 11px;
+  color: var(--fg);
+  letter-spacing: 0.2em;
 }

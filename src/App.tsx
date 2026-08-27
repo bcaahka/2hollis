@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Route } from 'react-router-dom';
+import { Navigate, Route } from 'react-router-dom';
 import { IonApp, IonRouterOutlet, setupIonicReact } from '@ionic/react';
 import { IonReactRouter } from '@ionic/react-router';
 import { Capacitor } from '@capacitor/core';
@@ -10,7 +10,6 @@ import { PlayerProvider } from './player/PlayerProvider';
 import { ThemeProvider } from './theme/ThemeProvider';
 import { useTheme } from './theme/theme';
 import Library from './pages/Library';
-import Tracks from './pages/Tracks';
 import Album from './pages/Album';
 import Player from './pages/Player';
 
@@ -58,7 +57,7 @@ const ThemedApp: React.FC = () => {
               <IonRouterOutlet>
                 <Route path="/player" element={<Player />} />
                 <Route path="/album/:albumId" element={<Album />} />
-                <Route path="/tracks" element={<Tracks />} />
+                <Route path="/tracks" element={<Navigate to="/" replace />} />
                 <Route path="/" element={<Library />} />
               </IonRouterOutlet>
             </IonReactRouter>

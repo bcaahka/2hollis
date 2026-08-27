@@ -1,48 +1,78 @@
+import { useCallback, useRef, useState } from 'react';
 import { IonContent, IonPage } from '@ionic/react';
 import { useNavigate } from 'react-router-dom';
 import { albumCover } from '../data/songs';
 import { useCatalog } from '../data/catalogContext';
 import { usePlayer } from '../player/context';
 import ArchiveHeader from '../components/ArchiveHeader';
+import type { ArchiveView } from '../components/ArchiveHeader';
 import Cover from '../components/Cover';
 import Cross from '../components/Cross';
 import MiniPlayer from '../components/MiniPlayer';
+import TrackList from '../components/TrackList';
 import './Library.css';
 
 const Library: React.FC = () => {
   const { current } = usePlayer();
   const { albums } = useCatalog();
   const navigate = useNavigate();
+  const [view, setView] = useState<ArchiveView>('releases');
+  const contentRef = useRef<HTMLIonContentElement>(null);
+
+  const onView = useCallback((next: ArchiveView) => {
+    setView(next);
+    void contentRef.current?.scrollToTop(280);
+  }, []);
+
+  const releases = albums.filter((album) => album.tracks.length > 0);
 
   return (
     <IonPage>
-      <IonContent fullscreen>
-        <ArchiveHeader view="releases" />
+      <IonContent ref={contentRef} fullscreen>
+        <ArchiveHeader view={view} onView={onView} />
 
-        <div className="lib-grid">
-          {albums
-            .filter((album) => album.tracks.length > 0)
-            .map((album) => {
-              const active = current?.albumId === album.id;
-              return (
+        <div key={view} className="lib-pane">
+          {view === 'releases' ? (
+            <div className="lib-grid">
+              {releases.map((album) => {
+                const active = current?.albumId === album.id;
+                return (
+                  <button
+                    key={album.id}
+                    type="button"
+                    className={`lib-album${active ? ' active' : ''}`}
+                    onClick={() => navigate(`/album/${album.id}`)}
+                  >
+                    <Cover
+                      album={album.title}
+                      year={album.year}
+                      cover={albumCover(album)}
+                    />
+                    <div className="lib-album-title">{album.title}</div>
+                    <div className="lib-album-meta">
+                      {album.year} · {album.tracks.length}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            releases.map((album) => (
+              <section className="tracks-album" key={album.id}>
                 <button
-                  key={album.id}
                   type="button"
-                  className={`lib-album${active ? ' active' : ''}`}
+                  className="tracks-album-head"
                   onClick={() => navigate(`/album/${album.id}`)}
                 >
-                  <Cover
-                    album={album.title}
-                    year={album.year}
-                    cover={albumCover(album)}
-                  />
-                  <div className="lib-album-title">{album.title}</div>
-                  <div className="lib-album-meta">
+                  <span className="tracks-album-title">{album.title}</span>
+                  <span className="tracks-album-year">
                     {album.year} · {album.tracks.length}
-                  </div>
+                  </span>
                 </button>
-              );
-            })}
+                <TrackList tracks={album.tracks} />
+              </section>
+            ))
+          )}
         </div>
 
         <footer className="lib-footer">

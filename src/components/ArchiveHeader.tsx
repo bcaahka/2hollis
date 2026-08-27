@@ -1,19 +1,22 @@
-import { useNavigate } from 'react-router-dom';
 import { useCatalog } from '../data/catalogContext';
 import { useTheme } from '../theme/theme';
 import Cross from './Cross';
 
-type ArchiveView = 'releases' | 'tracks';
+export type ArchiveView = 'releases' | 'tracks';
 
-const ArchiveHeader: React.FC<{ view: ArchiveView }> = ({ view }) => {
+type ArchiveHeaderProps = {
+  view: ArchiveView;
+  onView: (view: ArchiveView) => void;
+};
+
+const ArchiveHeader: React.FC<ArchiveHeaderProps> = ({ view, onView }) => {
   const { albums, songs } = useCatalog();
   const { theme, toggleTheme } = useTheme();
-  const navigate = useNavigate();
 
   return (
     <header className="lib-header">
       <div className="lib-top">
-        <button type="button" className="lib-logo" onClick={() => navigate('/')}>
+        <button type="button" className="lib-logo" onClick={() => onView('releases')}>
           2HOLLIS
           <Cross className="lib-cross" />
         </button>
@@ -29,18 +32,20 @@ const ArchiveHeader: React.FC<{ view: ArchiveView }> = ({ view }) => {
       <div className="lib-sub">
         ARCHIVE · {albums.length} RELEASES · {songs.length} TRACKS
       </div>
-      <nav className="lib-nav">
+      <nav className="lib-nav" aria-label="Archive">
         <button
           type="button"
           className={`lib-nav-btn${view === 'releases' ? ' active' : ''}`}
-          onClick={() => navigate('/')}
+          aria-current={view === 'releases' ? 'page' : undefined}
+          onClick={() => onView('releases')}
         >
           RELEASES
         </button>
         <button
           type="button"
           className={`lib-nav-btn${view === 'tracks' ? ' active' : ''}`}
-          onClick={() => navigate('/tracks')}
+          aria-current={view === 'tracks' ? 'page' : undefined}
+          onClick={() => onView('tracks')}
         >
           ALL TRACKS
         </button>
